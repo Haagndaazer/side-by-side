@@ -1,0 +1,17 @@
+{
+  "mcpServers": {
+    "android-mcp": {
+      "command": "uvx",
+      "args": [
+        "android-mcp"
+      ]
+    },
+    "vibe-ragnar": {
+      "command": "uv",
+      "args": ["run", "--directory", "C:\\Users\\colto\\Documents\\vibe-ragnar", "python", "-m", "vibe_ragnar.server"],
+      "env": {
+        "REPO_PATH":"C:/Users/colto/Documents/Projects/side-by-side"
+      }
+    }
+  }
+}

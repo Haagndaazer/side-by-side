@@ -1,0 +1,98 @@
+{
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1"
+  },
+  "permissions": {
+    "allow": [
+      "Bash(mkdir:*)",
+      "Bash(uv:*)",
+      "Bash(find:*)",
+      "Bash(mv:*)",
+      "Bash(grep:*)",
+      "Bash(npm:*)",
+      "Bash(ls:*)",
+      "Bash(cp:*)",
+      "Write",
+      "Edit",
+      "Read(~/.21st/worktrees/linglang)",
+      "Bash(chmod:*)",
+      "Bash(touch:*)",
+      "Bash(grep:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "mcp__android-mcp",
+      "mcp__linear",
+      "Skill(commit-skill)",
+      "Skill(commit)",
+      "Skill(linear-plan)",
+      "Skill(RAG-explore)",
+      "mcp__vibe-ragnar",
+      "Skill(flutter-run)",
+      "Skill(flutter-analyze)",
+      "Skill(flutter-read-logs)",
+      "Skill(flutter-reload)",
+      "Bash(cmd /c \".\\\\.claude\\\\skills\\\\flutter-run\\\\scripts\\\\launch.bat\")",
+      "Bash(powershell.exe -Command \"& cmd /c ''.\\\\.claude\\\\skills\\\\flutter-read-logs\\\\scripts\\\\read_logs.bat''\")",
+      "Bash(powershell.exe -Command \"& cmd /c ''.\\\\.claude\\\\skills\\\\flutter-reload\\\\scripts\\\\reload.bat''\")",
+      "Bash(powershell.exe -Command \"& cmd /c ''.\\\\.claude\\\\skills\\\\flutter-reload\\\\scripts\\\\restart.bat''\")",
+      "Skill(flutter-qa-testing)",
+      "Bash(flutter --coverage:*)",
+      "Bash(flutter test:*)",
+      "Bash(flutter analyze:*)",
+      "WebSearch",
+      "Read(C:/Users/colto/Pictures/Screenshots/**)",
+      "Bash(git config:*)",
+      "Bash(git add:*)",
+      "Read(E:/**)",
+      "Bash(cd:*)",
+      "Bash(test:*)",
+      "Bash(git log:*)",
+      "Bash(wc:*)",
+      "Bash(adb:*)",
+      "Bash(file:*)",
+      "WebFetch(domain:*)",
+      "Skill(git-pr-review)",
+      "Bash(gh pr:*)",
+      "Bash(gh auth:*)"
+    ],
+    "deny": []
+  },
+  "enabledMcpjsonServers": [
+    "android-mcp",
+    "linear",
+    "vibe-ragnar"
+  ],
+  "hooks": {
+    "PreToolUse": [],
+    "PostToolUse": [],
+    "Notification": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx tsx .claude/hooks/notification.ts --notify"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "npx tsx .claude/hooks/stop.ts --chat"
+          }
+        ]
+      }
+    ]
+  },
+  "statusLine": {
+    "type": "command",
+    "command": "python .claude/scripts/claude-code-status-line.py"
+  },
+  "enabledPlugins": {
+    "code-review@claude-plugins-official": true
+  }
+}

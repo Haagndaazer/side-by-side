@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:github.com)",
+      "Bash(tasklist:*)",
+      "Bash(findstr:*)",
+      "Bash(timeout /t 10 /nobreak)",
+      "Bash(C:UserscoltoAppDataLocalAndroidsdkplatform-toolsadb.exe devices)",
+      "WebFetch(domain:docs.claude.com)",
+      "WebFetch(domain:news.ycombinator.com)",
+      "WebFetch(domain:dotclaude.com)",
+      "Bash(git worktree add:*)",
+      "Bash(if not exist \"C:\\\\Users\\\\colto\\\\.21st\\\\worktrees\\\\linglang\" mkdir \"C:\\\\Users\\\\colto\\\\.21st\\\\worktrees\\\\linglang\")",
+      "Bash(timeout 60 bash:*)",
+      "Bash(git pull:*)",
+      "Bash(git stash:*)"
+    ],
+    "deny": []
+  },
+  "enableAllProjectMcpServers": true,
+  "enabledMcpjsonServers": [
+    "android-mcp",
+    "linear",
+    "vibe-ragnar"
+  ]
+}

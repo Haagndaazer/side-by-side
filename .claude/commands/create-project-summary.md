@@ -1,0 +1,3 @@
+create for me a in depth markdown file outlining the different features, architecture choices, tools, and tech stack, as a summary to help me plan better for future features. Place it in a file called project-summary.md in the documentation folder.
+
+Use vibe-ragnar MCP to get faster initial results usiing the vector search capabilites and stored graph knowledge of the project, then use traditional explore subagents to dial in more granularly afterwards. Search all of the Linear issues as well for historical context and information on descisions.
