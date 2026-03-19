@@ -108,6 +108,86 @@ object BitmapUtils {
         return rotated
     }
 
+    fun normalizeDepthMap(rawDepth: FloatArray): FloatArray {
+        var min = Float.MAX_VALUE
+        var max = Float.MIN_VALUE
+        for (v in rawDepth) {
+            if (v < min) min = v
+            if (v > max) max = v
+        }
+        val range = max - min
+        val result = FloatArray(rawDepth.size)
+        if (range > 0f) {
+            for (i in rawDepth.indices) {
+                result[i] = ((rawDepth[i] - min) / range).coerceIn(0f, 1f)
+            }
+        } else {
+            result.fill(0.5f)
+        }
+        return result
+    }
+
+    fun blurDepthMap(
+        depth: FloatArray,
+        width: Int,
+        height: Int,
+        kernelSize: Int
+    ): FloatArray {
+        if (kernelSize <= 1) return depth.copyOf()
+        val k = if (kernelSize % 2 == 0) kernelSize + 1 else kernelSize
+        val half = k / 2
+        var current = depth.copyOf()
+        var buffer = FloatArray(current.size)
+
+        // 3 passes of separable box blur
+        repeat(3) {
+            // Horizontal pass
+            for (y in 0 until height) {
+                val rowOffset = y * width
+                var sum = 0f
+                // Initialize running sum for first pixel
+                for (dx in -half..half) {
+                    sum += current[rowOffset + dx.coerceIn(0, width - 1)]
+                }
+                buffer[rowOffset] = sum / k
+
+                for (x in 1 until width) {
+                    val addIdx = (x + half).coerceIn(0, width - 1)
+                    val removeIdx = (x - half - 1).coerceIn(0, width - 1)
+                    sum += current[rowOffset + addIdx] - current[rowOffset + removeIdx]
+                    buffer[rowOffset + x] = sum / k
+                }
+            }
+
+            // Swap
+            val temp = current
+            current = buffer
+            buffer = temp
+
+            // Vertical pass
+            for (x in 0 until width) {
+                var sum = 0f
+                for (dy in -half..half) {
+                    sum += current[dy.coerceIn(0, height - 1) * width + x]
+                }
+                buffer[x] = sum / k
+
+                for (y in 1 until height) {
+                    val addIdx = (y + half).coerceIn(0, height - 1)
+                    val removeIdx = (y - half - 1).coerceIn(0, height - 1)
+                    sum += current[addIdx * width + x] - current[removeIdx * width + x]
+                    buffer[y * width + x] = sum / k
+                }
+            }
+
+            val temp2 = current
+            current = buffer
+            buffer = temp2
+        }
+
+        return current
+    }
+
     fun loadBitmapFromAsset(context: Context, assetPath: String): Bitmap? {
         return try {
             context.assets.open(assetPath).use { BitmapFactory.decodeStream(it) }
