@@ -157,6 +157,10 @@ test-images/
 # ONNX models (large, downloaded by Gradle task)
 app/src/main/assets/*.onnx
 
+# Python cache
+scripts/.cache/
+scripts/__pycache__/
+
 # Android native project
 local.properties
 .idea/

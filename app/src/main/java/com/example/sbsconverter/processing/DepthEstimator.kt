@@ -8,6 +8,10 @@ import java.nio.FloatBuffer
 
 class DepthEstimator(private val modelPath: String) : Closeable {
 
+    companion object {
+        const val MODEL_INPUT_SIZE = 518
+    }
+
     private var ortEnvironment: OrtEnvironment? = null
     private var ortSession: OrtSession? = null
 
@@ -22,9 +26,7 @@ class DepthEstimator(private val modelPath: String) : Closeable {
             setIntraOpNumThreads(
                 minOf(4, Runtime.getRuntime().availableProcessors())
             )
-            // Use NO_OPT — the FP16 model has pre-fused nodes (SimplifiedLayerNormFusion)
-            // that conflict with ONNX Runtime's own graph optimization passes
-            setOptimizationLevel(OrtSession.SessionOptions.OptLevel.NO_OPT)
+            setOptimizationLevel(OrtSession.SessionOptions.OptLevel.BASIC_OPT)
         }
 
         ortSession = env.createSession(modelPath, options)
@@ -34,22 +36,22 @@ class DepthEstimator(private val modelPath: String) : Closeable {
         val env = ortEnvironment ?: throw IllegalStateException("DepthEstimator not initialized")
         val session = ortSession ?: throw IllegalStateException("DepthEstimator not initialized")
 
-        val shape = longArrayOf(1, 3, 518, 518)
+        val shape = longArrayOf(1, 3, MODEL_INPUT_SIZE.toLong(), MODEL_INPUT_SIZE.toLong())
         val onnxTensor = OnnxTensor.createTensor(env, inputTensor, shape)
 
-        val results = session.run(mapOf("pixel_values" to onnxTensor))
+        // fabio-sim export uses "image" / "depth" tensor names
+        val results = session.run(mapOf("image" to onnxTensor))
 
-        val outputTensor = results.get("predicted_depth")
-            .orElseThrow { RuntimeException("No predicted_depth output from model") }
+        val outputTensor = results.get("depth")
+            .orElseThrow { RuntimeException("No depth output from model") }
 
-        // Output shape is [1, 518, 518] — Java represents as float[1][518][518] = Array<Array<FloatArray>>
+        // Output shape is [1, 756, 756] — Java represents as Array<Array<FloatArray>>
         @Suppress("UNCHECKED_CAST")
         val depthMap3d = outputTensor.value as Array<Array<FloatArray>>
-        // Flatten [518][518] into a single FloatArray of length 518*518
         val depth2d = depthMap3d[0]
-        val flatDepth = FloatArray(518 * 518)
+        val flatDepth = FloatArray(MODEL_INPUT_SIZE * MODEL_INPUT_SIZE)
         for (row in depth2d.indices) {
-            System.arraycopy(depth2d[row], 0, flatDepth, row * 518, 518)
+            System.arraycopy(depth2d[row], 0, flatDepth, row * MODEL_INPUT_SIZE, MODEL_INPUT_SIZE)
         }
 
         onnxTensor.close()

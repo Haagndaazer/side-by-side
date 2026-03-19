@@ -40,21 +40,16 @@ android {
     }
 }
 
-val downloadModel by tasks.registering(Exec::class) {
-    val modelFile = file("src/main/assets/model_fp16.onnx")
+val prepareModel by tasks.registering(Exec::class) {
+    val modelFile = file("src/main/assets/depth_anything_v2_vitb_518.onnx")
     outputs.file(modelFile)
     onlyIf { !modelFile.exists() }
-    doFirst {
-        modelFile.parentFile.mkdirs()
-    }
-    commandLine(
-        "curl", "--retry", "3", "-L", "-C", "-", "-o", modelFile.absolutePath,
-        "https://huggingface.co/onnx-community/depth-anything-v2-base/resolve/main/onnx/model_fp16.onnx"
-    )
+    workingDir(rootProject.projectDir)
+    commandLine("python", "scripts/prepare_model.py")
 }
 
 tasks.named("preBuild") {
-    dependsOn(downloadModel)
+    dependsOn(prepareModel)
 }
 
 dependencies {
