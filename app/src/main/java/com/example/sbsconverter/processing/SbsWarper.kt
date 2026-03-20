@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import com.example.sbsconverter.model.Arrangement
 import com.example.sbsconverter.model.ProcessingConfig
+import com.example.sbsconverter.model.SbsResult
 
 class SbsWarper {
 
@@ -17,21 +18,34 @@ class SbsWarper {
         sourceBitmap: Bitmap,
         normalizedDepth518: FloatArray,
         config: ProcessingConfig
-    ): Bitmap {
-        val leftEye = warpEye(sourceBitmap, normalizedDepth518, isLeftEye = true, config)
-        val rightEye = warpEye(sourceBitmap, normalizedDepth518, isLeftEye = false, config)
-        val result = combineViews(leftEye, rightEye, sourceBitmap.width, sourceBitmap.height, config)
+    ): SbsResult {
+        // Symmetric warping: both eyes shift by half disparity
+        val (leftEye, _, _, _) = warpEye(sourceBitmap, normalizedDepth518, isLeftEye = true, config)
+        val (rightEye, rightVerts, meshW, meshH) = warpEye(sourceBitmap, normalizedDepth518, isLeftEye = false, config)
+        val combined = combineViews(leftEye, rightEye, sourceBitmap.width, sourceBitmap.height, config)
         leftEye.recycle()
         rightEye.recycle()
-        return result
+        return SbsResult(
+            sbsBitmap = combined,
+            meshVerts = rightVerts,
+            meshW = meshW,
+            meshH = meshH
+        )
     }
+
+    private data class WarpResult(
+        val bitmap: Bitmap,
+        val verts: FloatArray,
+        val meshW: Int,
+        val meshH: Int
+    )
 
     private fun warpEye(
         bitmap: Bitmap,
         depth518: FloatArray,
         isLeftEye: Boolean,
         config: ProcessingConfig
-    ): Bitmap {
+    ): WarpResult {
         val w = bitmap.width
         val h = bitmap.height
         val meshW = minOf(w / MESH_DIVISOR, MAX_MESH_DIM).coerceAtLeast(10)
@@ -40,7 +54,8 @@ class SbsWarper {
         val vertCount = (meshW + 1) * (meshH + 1)
         val verts = FloatArray(vertCount * 2)
 
-        val maxDisparity = config.depthScale / 100f * w
+        // Half disparity per eye for symmetric warping
+        val maxDisparity = config.depthScale / 100f * w / 2f
         val direction = if (isLeftEye) -1f else 1f
 
         for (row in 0..meshH) {
@@ -53,7 +68,8 @@ class SbsWarper {
                 val depthY = (py / h * (DEPTH_SIZE - 1)).coerceIn(0f, (DEPTH_SIZE - 1).toFloat())
                 val depth = bilinearSample(depth518, DEPTH_SIZE, DEPTH_SIZE, depthX, depthY)
 
-                val shift = depth * maxDisparity * direction
+                val adjustedDepth = depth - config.convergencePoint
+                val shift = adjustedDepth * maxDisparity * direction
                 verts[idx] = (px + shift).coerceIn(0f, w.toFloat())
                 verts[idx + 1] = py
             }
@@ -62,7 +78,7 @@ class SbsWarper {
         val output = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(output)
         canvas.drawBitmapMesh(bitmap, meshW, meshH, verts, 0, null, 0, null)
-        return output
+        return WarpResult(output, verts, meshW, meshH)
     }
 
     private fun bilinearSample(

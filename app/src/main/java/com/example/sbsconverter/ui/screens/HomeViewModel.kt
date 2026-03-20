@@ -3,9 +3,12 @@ package com.example.sbsconverter.ui.screens
 import android.app.Application
 import android.graphics.Bitmap
 import android.net.Uri
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.sbsconverter.model.ProcessingConfig
+import com.example.sbsconverter.model.SbsResult
 import com.example.sbsconverter.processing.DepthEstimator
 import com.example.sbsconverter.processing.ImageProcessor
 import com.example.sbsconverter.util.BitmapUtils
@@ -26,20 +29,31 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     // Cached raw depth map (518x518) — avoids re-running inference when tweaking settings
     private var cachedRawDepth: FloatArray? = null
 
+    // Keep source bitmap for processing (used by SbsWarper)
+    private var sourceBitmap: Bitmap? = null
+
+    // Keep backing bitmaps alive while Compose references them via ImageBitmap.
+    // asImageBitmap() wraps the original — recycling it while Compose is drawing crashes.
+    private var depthBacking: Bitmap? = null
+
     private val _isModelReady = MutableStateFlow(false)
     val isModelReady: StateFlow<Boolean> = _isModelReady
 
     private val _modelLoadProgress = MutableStateFlow(0f)
     val modelLoadProgress: StateFlow<Float> = _modelLoadProgress
 
-    private val _originalBitmap = MutableStateFlow<Bitmap?>(null)
-    val originalBitmap: StateFlow<Bitmap?> = _originalBitmap
+    private val _originalImage = MutableStateFlow<ImageBitmap?>(null)
+    val originalImage: StateFlow<ImageBitmap?> = _originalImage
 
-    private val _depthBitmap = MutableStateFlow<Bitmap?>(null)
-    val depthBitmap: StateFlow<Bitmap?> = _depthBitmap
+    private val _depthImage = MutableStateFlow<ImageBitmap?>(null)
+    val depthImage: StateFlow<ImageBitmap?> = _depthImage
 
-    private val _isProcessing = MutableStateFlow(false)
-    val isProcessing: StateFlow<Boolean> = _isProcessing
+    // Split processing states for distinct UI overlays
+    private val _isEstimatingDepth = MutableStateFlow(false)
+    val isEstimatingDepth: StateFlow<Boolean> = _isEstimatingDepth
+
+    private val _isGeneratingSbs = MutableStateFlow(false)
+    val isGeneratingSbs: StateFlow<Boolean> = _isGeneratingSbs
 
     private val _errorMessage = MutableStateFlow<String?>(null)
     val errorMessage: StateFlow<String?> = _errorMessage
@@ -50,11 +64,34 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val _processingConfig = MutableStateFlow(ProcessingConfig())
     val processingConfig: StateFlow<ProcessingConfig> = _processingConfig
 
-    private val _sbsBitmap = MutableStateFlow<Bitmap?>(null)
-    val sbsBitmap: StateFlow<Bitmap?> = _sbsBitmap
+    // SBS result with mesh data
+    private var sbsResult: SbsResult? = null
+
+    private val _hasSbsResult = MutableStateFlow(false)
+    val hasSbsResult: StateFlow<Boolean> = _hasSbsResult
+
+    private val _sbsImage = MutableStateFlow<ImageBitmap?>(null)
+    val sbsImage: StateFlow<ImageBitmap?> = _sbsImage
 
     private val _sbsGenerationTimeMs = MutableStateFlow<Long?>(null)
     val sbsGenerationTimeMs: StateFlow<Long?> = _sbsGenerationTimeMs
+
+    // Mesh visualization
+    private val _meshVerts = MutableStateFlow<FloatArray?>(null)
+    val meshVerts: StateFlow<FloatArray?> = _meshVerts
+
+    private val _meshDimensions = MutableStateFlow<Pair<Int, Int>?>(null)
+    val meshDimensions: StateFlow<Pair<Int, Int>?> = _meshDimensions
+
+    private val _showMeshOverlay = MutableStateFlow(false)
+    val showMeshOverlay: StateFlow<Boolean> = _showMeshOverlay
+
+    private val _showWigglegram = MutableStateFlow(false)
+    val showWigglegram: StateFlow<Boolean> = _showWigglegram
+
+    // Image dimensions for mesh coordinate mapping
+    private val _imageDimensions = MutableStateFlow<Pair<Int, Int>?>(null)
+    val imageDimensions: StateFlow<Pair<Int, Int>?> = _imageDimensions
 
     private val _isSaving = MutableStateFlow(false)
     val isSaving: StateFlow<Boolean> = _isSaving
@@ -83,55 +120,49 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     fun onImageSelected(uri: Uri) {
         val context = getApplication<Application>()
         viewModelScope.launch {
-            _isProcessing.value = true
-            _errorMessage.value = null
-            _depthBitmap.value?.recycle()
-            _depthBitmap.value = null
-            _sbsBitmap.value?.recycle()
-            _sbsBitmap.value = null
-            _inferenceTimeMs.value = null
-            _sbsGenerationTimeMs.value = null
-            cachedRawDepth = null
+            resetForNewImage()
+            _isEstimatingDepth.value = true
             try {
                 val bitmap = withContext(Dispatchers.IO) {
                     BitmapUtils.loadBitmapFromUri(context, uri)
                 } ?: throw IllegalStateException("Failed to decode image")
 
-                _originalBitmap.value = bitmap
+                sourceBitmap = bitmap
+                _originalImage.value = bitmap.asImageBitmap()
+                _imageDimensions.value = Pair(bitmap.width, bitmap.height)
                 runDepthEstimation(bitmap)
             } catch (e: Exception) {
                 _errorMessage.value = "Error: ${e.message}"
             } finally {
-                _isProcessing.value = false
+                _isEstimatingDepth.value = false
             }
         }
     }
 
-    fun onTestImageSelected(assetPath: String) {
-        val context = getApplication<Application>()
-        viewModelScope.launch {
-            _isProcessing.value = true
-            _errorMessage.value = null
-            _depthBitmap.value?.recycle()
-            _depthBitmap.value = null
-            _sbsBitmap.value?.recycle()
-            _sbsBitmap.value = null
-            _inferenceTimeMs.value = null
-            _sbsGenerationTimeMs.value = null
-            cachedRawDepth = null
-            try {
-                val bitmap = withContext(Dispatchers.IO) {
-                    BitmapUtils.loadBitmapFromAsset(context, assetPath)
-                } ?: throw IllegalStateException("Failed to load test image")
+    private fun resetForNewImage() {
+        // Clear UI state first so Compose stops referencing old bitmaps
+        _errorMessage.value = null
+        _depthImage.value = null
+        _originalImage.value = null
+        _imageDimensions.value = null
+        _hasSbsResult.value = false
+        _sbsImage.value = null
+        _inferenceTimeMs.value = null
+        _sbsGenerationTimeMs.value = null
+        _meshVerts.value = null
+        _meshDimensions.value = null
+        _showMeshOverlay.value = false
+        _showWigglegram.value = false
+        cachedRawDepth = null
 
-                _originalBitmap.value = bitmap
-                runDepthEstimation(bitmap)
-            } catch (e: Exception) {
-                _errorMessage.value = "Error: ${e.message}"
-            } finally {
-                _isProcessing.value = false
-            }
-        }
+        // Recycle old backing bitmaps now that UI refs are cleared.
+        // The previous sourceBitmap backed _originalImage, and depthBacking backed _depthImage.
+        sourceBitmap?.recycle()
+        sourceBitmap = null
+        depthBacking?.recycle()
+        depthBacking = null
+        sbsResult?.sbsBitmap?.recycle()
+        sbsResult = null
     }
 
     private suspend fun runDepthEstimation(bitmap: Bitmap) {
@@ -150,7 +181,11 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         _inferenceTimeMs.value = System.currentTimeMillis() - startTime
-        _depthBitmap.value = depthBmp
+
+        // Recycle previous depth backing, then store new one
+        depthBacking?.recycle()
+        depthBacking = depthBmp
+        _depthImage.value = depthBmp.asImageBitmap()
     }
 
     fun updateConfig(config: ProcessingConfig) {
@@ -158,30 +193,46 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun generateSbs() {
-        val bitmap = _originalBitmap.value ?: return
+        val bitmap = sourceBitmap ?: return
         val rawDepth = cachedRawDepth ?: return
         viewModelScope.launch {
-            _isProcessing.value = true
+            _isGeneratingSbs.value = true
             _errorMessage.value = null
             try {
-                // Recycle previous SBS bitmap to prevent OOM
-                _sbsBitmap.value?.recycle()
-                _sbsBitmap.value = null
+                // Clear UI ref first, then recycle previous SBS result
+                _sbsImage.value = null
+                _hasSbsResult.value = false
+                val oldSbs = sbsResult
+                sbsResult = null
+                oldSbs?.sbsBitmap?.recycle()
 
                 val startTime = System.currentTimeMillis()
-                val sbs = imageProcessor.processImage(bitmap, rawDepth, _processingConfig.value)
+                val result = imageProcessor.processImage(bitmap, rawDepth, _processingConfig.value)
                 _sbsGenerationTimeMs.value = System.currentTimeMillis() - startTime
-                _sbsBitmap.value = sbs
+
+                sbsResult = result
+                _hasSbsResult.value = true
+                _sbsImage.value = result.sbsBitmap.asImageBitmap()
+                _meshVerts.value = result.meshVerts
+                _meshDimensions.value = Pair(result.meshW, result.meshH)
             } catch (e: Exception) {
                 _errorMessage.value = "SBS generation failed: ${e.message}"
             } finally {
-                _isProcessing.value = false
+                _isGeneratingSbs.value = false
             }
         }
     }
 
+    fun toggleMeshOverlay() {
+        _showMeshOverlay.value = !_showMeshOverlay.value
+    }
+
+    fun toggleWigglegram() {
+        _showWigglegram.value = !_showWigglegram.value
+    }
+
     fun saveSbsToGallery() {
-        val sbs = _sbsBitmap.value ?: return
+        val sbs = sbsResult?.sbsBitmap ?: return
         viewModelScope.launch {
             _isSaving.value = true
             try {
@@ -202,6 +253,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         depthEstimator?.close()
+        sourceBitmap?.recycle()
+        depthBacking?.recycle()
+        sbsResult?.sbsBitmap?.recycle()
         super.onCleared()
     }
 }

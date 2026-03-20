@@ -7,6 +7,7 @@ import android.graphics.Matrix
 import android.net.Uri
 import androidx.exifinterface.media.ExifInterface
 import java.nio.ByteBuffer
+import kotlin.math.pow
 import java.nio.ByteOrder
 import java.nio.FloatBuffer
 
@@ -71,31 +72,71 @@ object BitmapUtils {
         val depthBitmap = Bitmap.createBitmap(MODEL_INPUT_SIZE, MODEL_INPUT_SIZE, Bitmap.Config.ARGB_8888)
         depthBitmap.setPixels(pixels, 0, MODEL_INPUT_SIZE, 0, 0, MODEL_INPUT_SIZE, MODEL_INPUT_SIZE)
 
-        if (outputWidth == MODEL_INPUT_SIZE && outputHeight == MODEL_INPUT_SIZE) {
+        // Cap output size to avoid OOM with huge source images
+        val targetW = outputWidth.coerceAtMost(MAX_IMAGE_DIMENSION)
+        val targetH = outputHeight.coerceAtMost(MAX_IMAGE_DIMENSION)
+
+        if (targetW == MODEL_INPUT_SIZE && targetH == MODEL_INPUT_SIZE) {
             return depthBitmap
         }
-        val scaled = Bitmap.createScaledBitmap(depthBitmap, outputWidth, outputHeight, true)
+        val scaled = Bitmap.createScaledBitmap(depthBitmap, targetW, targetH, true)
         depthBitmap.recycle()
         return scaled
     }
 
+    /**
+     * Max pixel dimension for loaded images. Keeps memory usage reasonable
+     * (~2048x2048x4 = 16MB) while preserving enough quality for SBS output.
+     */
+    private const val MAX_IMAGE_DIMENSION = 2048
+
     fun loadBitmapFromUri(context: Context, uri: Uri): Bitmap? {
-        val inputStream = context.contentResolver.openInputStream(uri) ?: return null
-        val bitmap = BitmapFactory.decodeStream(inputStream)
-        inputStream.close()
-        if (bitmap == null) return null
+        // First pass: decode bounds only to calculate sample size
+        val boundsOptions = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        context.contentResolver.openInputStream(uri)?.use {
+            BitmapFactory.decodeStream(it, null, boundsOptions)
+        }
+        val rawWidth = boundsOptions.outWidth
+        val rawHeight = boundsOptions.outHeight
+        if (rawWidth <= 0 || rawHeight <= 0) return null
+
+        // Calculate power-of-2 sample size for efficient decode
+        var sampleSize = 1
+        while (rawWidth / (sampleSize * 2) >= MAX_IMAGE_DIMENSION ||
+            rawHeight / (sampleSize * 2) >= MAX_IMAGE_DIMENSION
+        ) {
+            sampleSize *= 2
+        }
+
+        // Second pass: decode with subsampling
+        val decodeOptions = BitmapFactory.Options().apply { inSampleSize = sampleSize }
+        val decoded = context.contentResolver.openInputStream(uri)?.use {
+            BitmapFactory.decodeStream(it, null, decodeOptions)
+        } ?: return null
+
+        // Fine-scale if still exceeds max (inSampleSize is coarse, power-of-2 only)
+        val bitmap = if (decoded.width > MAX_IMAGE_DIMENSION || decoded.height > MAX_IMAGE_DIMENSION) {
+            val scale = MAX_IMAGE_DIMENSION.toFloat() / maxOf(decoded.width, decoded.height)
+            val newW = (decoded.width * scale).toInt()
+            val newH = (decoded.height * scale).toInt()
+            val scaled = Bitmap.createScaledBitmap(decoded, newW, newH, true)
+            if (scaled !== decoded) decoded.recycle()
+            scaled
+        } else {
+            decoded
+        }
 
         // Handle EXIF rotation
         val rotation = try {
-            val exifStream = context.contentResolver.openInputStream(uri) ?: return bitmap
-            val exif = ExifInterface(exifStream)
-            exifStream.close()
-            when (exif.getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)) {
-                ExifInterface.ORIENTATION_ROTATE_90 -> 90f
-                ExifInterface.ORIENTATION_ROTATE_180 -> 180f
-                ExifInterface.ORIENTATION_ROTATE_270 -> 270f
-                else -> 0f
-            }
+            context.contentResolver.openInputStream(uri)?.use { exifStream ->
+                val exif = ExifInterface(exifStream)
+                when (exif.getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL)) {
+                    ExifInterface.ORIENTATION_ROTATE_90 -> 90f
+                    ExifInterface.ORIENTATION_ROTATE_180 -> 180f
+                    ExifInterface.ORIENTATION_ROTATE_270 -> 270f
+                    else -> 0f
+                }
+            } ?: 0f
         } catch (_: Exception) {
             0f
         }
@@ -125,6 +166,46 @@ object BitmapUtils {
             result.fill(0.5f)
         }
         return result
+    }
+
+    /**
+     * Histogram equalization — redistributes depth values so the full [0,1] range
+     * is utilized. Prevents most of the disparity budget from being wasted on
+     * clustered depth values (e.g., a person's body at similar depth).
+     */
+    fun equalizeDepthHistogram(depth: FloatArray, numBins: Int = 1024): FloatArray {
+        val histogram = IntArray(numBins)
+        for (v in depth) {
+            val bin = (v * (numBins - 1)).toInt().coerceIn(0, numBins - 1)
+            histogram[bin]++
+        }
+        // Build CDF
+        val cdf = FloatArray(numBins)
+        cdf[0] = histogram[0].toFloat()
+        for (i in 1 until numBins) {
+            cdf[i] = cdf[i - 1] + histogram[i]
+        }
+        val cdfMin = cdf.first { it > 0f }
+        val total = depth.size.toFloat()
+        val denominator = total - cdfMin
+        if (denominator <= 0f) return depth.copyOf()
+
+        return FloatArray(depth.size) { i ->
+            val bin = (depth[i] * (numBins - 1)).toInt().coerceIn(0, numBins - 1)
+            ((cdf[bin] - cdfMin) / denominator).coerceIn(0f, 1f)
+        }
+    }
+
+    /**
+     * Power curve remapping — gamma < 1 expands mid-range detail (more 3D pop),
+     * gamma > 1 compresses it. Applied after histogram equalization.
+     */
+    fun remapDepthGamma(depth: FloatArray, gamma: Float): FloatArray {
+        if (gamma == 1f) return depth.copyOf()
+        val g = gamma.toDouble()
+        return FloatArray(depth.size) { i ->
+            depth[i].toDouble().pow(g).toFloat()
+        }
     }
 
     fun blurDepthMap(
