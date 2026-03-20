@@ -3,12 +3,12 @@ package com.example.sbsconverter.ui.screens
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -20,23 +20,23 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.IconButton
-import androidx.compose.material3.SegmentedButton
-import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TooltipBox
 import androidx.compose.material3.TooltipDefaults
@@ -61,11 +61,11 @@ import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import com.example.sbsconverter.model.Arrangement as SbsArrangement
 import com.example.sbsconverter.model.ProcessingConfig
@@ -86,16 +86,14 @@ fun HomeScreen(viewModel: HomeViewModel) {
     val hasSbsResult by viewModel.hasSbsResult.collectAsState()
     val sbsImage by viewModel.sbsImage.collectAsState()
     val sbsGenerationTimeMs by viewModel.sbsGenerationTimeMs.collectAsState()
-    val meshVerts by viewModel.meshVerts.collectAsState()
-    val meshDimensions by viewModel.meshDimensions.collectAsState()
-    val showMeshOverlay by viewModel.showMeshOverlay.collectAsState()
-    val showWigglegram by viewModel.showWigglegram.collectAsState()
+    val viewMode by viewModel.viewMode.collectAsState()
     val normalizedDepth by viewModel.normalizedDepth.collectAsState()
     val imageDimensions by viewModel.imageDimensions.collectAsState()
     val isSaving by viewModel.isSaving.collectAsState()
     val saveSuccess by viewModel.saveSuccess.collectAsState()
 
     val snackbarHostState = remember { SnackbarHostState() }
+    var isAdjustingConvergence by remember { mutableStateOf(false) }
 
     val pickMedia = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
@@ -103,7 +101,6 @@ fun HomeScreen(viewModel: HomeViewModel) {
         uri?.let { viewModel.onImageSelected(it) }
     }
 
-    // Show save feedback via snackbar
     LaunchedEffect(saveSuccess) {
         saveSuccess?.let { success ->
             snackbarHostState.showSnackbar(
@@ -114,15 +111,6 @@ fun HomeScreen(viewModel: HomeViewModel) {
     }
 
     val isAnyProcessing = isEstimatingDepth || isGeneratingSbs
-    var isAdjustingConvergence by remember { mutableStateOf(false) }
-    val scrollState = rememberScrollState()
-
-    // Auto-scroll to bottom when SBS result appears
-    LaunchedEffect(sbsImage) {
-        if (sbsImage != null) {
-            scrollState.animateScrollTo(scrollState.maxValue)
-        }
-    }
 
     Scaffold(
         snackbarHost = { SnackbarHost(snackbarHostState) }
@@ -132,49 +120,75 @@ fun HomeScreen(viewModel: HomeViewModel) {
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            // Scrollable content area — image preview + SBS preview
-            Column(
+            // View mode tabs (only shown after SBS generation)
+            if (hasSbsResult) {
+                TabRow(
+                    selectedTabIndex = viewMode.ordinal,
+                    modifier = Modifier.semantics { contentDescription = "Preview mode tabs" }
+                ) {
+                    TooltipBox(
+                        positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+                        tooltip = { PlainTooltip { Text("Compare original photo with depth map") } },
+                        state = rememberTooltipState()
+                    ) {
+                        Tab(
+                            selected = viewMode == ViewMode.DEPTH_COMPARE,
+                            onClick = { viewModel.setViewMode(ViewMode.DEPTH_COMPARE) },
+                            text = { Text("Original") }
+                        )
+                    }
+                    TooltipBox(
+                        positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+                        tooltip = { PlainTooltip { Text("View generated side-by-side 3D image") } },
+                        state = rememberTooltipState()
+                    ) {
+                        Tab(
+                            selected = viewMode == ViewMode.SBS_RESULT,
+                            onClick = { viewModel.setViewMode(ViewMode.SBS_RESULT) },
+                            text = { Text("3D Result") }
+                        )
+                    }
+                    TooltipBox(
+                        positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+                        tooltip = { PlainTooltip { Text("Animated depth preview alternating left/right eyes") } },
+                        state = rememberTooltipState()
+                    ) {
+                        Tab(
+                            selected = viewMode == ViewMode.WIGGLEGRAM,
+                            onClick = { viewModel.setViewMode(ViewMode.WIGGLEGRAM) },
+                            text = { Text("Wigglegram") }
+                        )
+                    }
+                }
+            }
+
+            // Image preview area
+            Box(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth()
-                    .verticalScroll(scrollState),
-                horizontalAlignment = Alignment.CenterHorizontally
+                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                contentAlignment = Alignment.Center
             ) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    ImagePreviewArea(
-                        isModelReady = isModelReady,
-                        modelLoadProgress = modelLoadProgress,
-                        originalImage = originalImage,
-                        depthImage = depthImage,
-                        isEstimatingDepth = isEstimatingDepth,
-                        isGeneratingSbs = isGeneratingSbs,
-                        errorMessage = errorMessage,
-                        inferenceTimeMs = inferenceTimeMs,
-                        sbsGenerationTimeMs = sbsGenerationTimeMs,
-                        meshVerts = meshVerts,
-                        meshDimensions = meshDimensions,
-                        showMeshOverlay = showMeshOverlay,
-                        showWigglegram = showWigglegram,
-                        sbsImage = sbsImage,
-                        imageDimensions = imageDimensions,
-                        hasSbsResult = hasSbsResult,
-                        isAdjustingConvergence = isAdjustingConvergence,
-                        normalizedDepth = normalizedDepth,
-                        convergencePoint = processingConfig.convergencePoint,
-                        onToggleMesh = { viewModel.toggleMeshOverlay() },
-                        onToggleWigglegram = { viewModel.toggleWigglegram() }
-                    )
-                }
-
-                // SBS preview — shown after generation
-                if (sbsImage != null) {
-                    SbsPreview(sbsImage = sbsImage!!, arrangement = processingConfig.arrangement)
-                }
+                ImagePreviewArea(
+                    isModelReady = isModelReady,
+                    modelLoadProgress = modelLoadProgress,
+                    originalImage = originalImage,
+                    depthImage = depthImage,
+                    isEstimatingDepth = isEstimatingDepth,
+                    isGeneratingSbs = isGeneratingSbs,
+                    errorMessage = errorMessage,
+                    inferenceTimeMs = inferenceTimeMs,
+                    sbsGenerationTimeMs = sbsGenerationTimeMs,
+                    viewMode = viewMode,
+                    sbsImage = sbsImage,
+                    imageDimensions = imageDimensions,
+                    hasSbsResult = hasSbsResult,
+                    isAdjustingConvergence = isAdjustingConvergence,
+                    normalizedDepth = normalizedDepth,
+                    convergencePoint = processingConfig.convergencePoint,
+                    arrangement = processingConfig.arrangement
+                )
             }
 
             // Pinned bottom control panel
@@ -186,8 +200,8 @@ fun HomeScreen(viewModel: HomeViewModel) {
                         PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                     )
                 },
-                onGenerate = { viewModel.generateSbs() },
                 onSave = { viewModel.saveSbsToGallery() },
+                onSliderFinished = { viewModel.onSliderFinished() },
                 isModelReady = isModelReady,
                 hasDepth = depthImage != null,
                 hasSbsResult = hasSbsResult,
@@ -212,18 +226,14 @@ private fun ImagePreviewArea(
     errorMessage: String?,
     inferenceTimeMs: Long?,
     sbsGenerationTimeMs: Long?,
-    meshVerts: FloatArray?,
-    meshDimensions: Pair<Int, Int>?,
-    showMeshOverlay: Boolean,
-    showWigglegram: Boolean,
+    viewMode: ViewMode,
     sbsImage: ImageBitmap?,
     imageDimensions: Pair<Int, Int>?,
     hasSbsResult: Boolean,
     isAdjustingConvergence: Boolean,
     normalizedDepth: FloatArray?,
     convergencePoint: Float,
-    onToggleMesh: () -> Unit,
-    onToggleWigglegram: () -> Unit
+    arrangement: SbsArrangement
 ) {
     if (!isModelReady) {
         ModelLoadingIndicator(modelLoadProgress, errorMessage)
@@ -251,50 +261,71 @@ private fun ImagePreviewArea(
             (imageDimensions?.second ?: originalImage.height).toFloat()
 
     Box(contentAlignment = Alignment.Center) {
-        // Main preview: wigglegram OR reveal slider OR original
-        if (showWigglegram && sbsImage != null) {
-            WigglegramPreview(
-                sbsImage = sbsImage,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(imageAspect)
-                    .clip(RoundedCornerShape(8.dp))
-            )
-        } else if (depthImage != null) {
-            DepthRevealSlider(
-                originalImage = originalImage,
-                depthImage = depthImage,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(8.dp))
-            )
-        } else {
-            Image(
-                bitmap = originalImage,
-                contentDescription = "Original image",
-                contentScale = ContentScale.Fit,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(imageAspect)
-                    .clip(RoundedCornerShape(8.dp))
-            )
+        // Main preview based on view mode (force depth compare while adjusting convergence)
+        val effectiveMode = if (isAdjustingConvergence && depthImage != null) null else viewMode
+        when {
+            hasSbsResult && effectiveMode == ViewMode.SBS_RESULT && sbsImage != null -> {
+                // SBS result view
+                TooltipBox(
+                    positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+                    tooltip = { PlainTooltip { Text("Side-by-side 3D result") } },
+                    state = rememberTooltipState()
+                ) {
+                    Column(
+                        modifier = Modifier.semantics { contentDescription = "SBS 3D result" },
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Image(
+                            bitmap = sbsImage,
+                            contentDescription = "Side-by-side 3D result",
+                            contentScale = ContentScale.Fit,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .aspectRatio(sbsImage.width.toFloat() / sbsImage.height.toFloat(), matchHeightConstraintsFirst = true)
+                                .clip(RoundedCornerShape(8.dp))
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = if (arrangement == SbsArrangement.PARALLEL) "Parallel (wall-eyed)" else "Cross-eye",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                        )
+                    }
+                }
+            }
+            hasSbsResult && effectiveMode == ViewMode.WIGGLEGRAM && sbsImage != null -> {
+                WigglegramPreview(
+                    sbsImage = sbsImage,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(imageAspect, matchHeightConstraintsFirst = true)
+                        .clip(RoundedCornerShape(8.dp))
+                )
+            }
+            depthImage != null -> {
+                // Depth compare (reveal slider) — default view
+                DepthRevealSlider(
+                    originalImage = originalImage,
+                    depthImage = depthImage,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                )
+            }
+            else -> {
+                Image(
+                    bitmap = originalImage,
+                    contentDescription = "Original image",
+                    contentScale = ContentScale.Fit,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(imageAspect, matchHeightConstraintsFirst = true)
+                        .clip(RoundedCornerShape(8.dp))
+                )
+            }
         }
 
-        // Mesh wireframe overlay
-        if (showMeshOverlay && meshVerts != null && meshDimensions != null && imageDimensions != null) {
-            MeshWireframeOverlay(
-                verts = meshVerts,
-                meshW = meshDimensions.first,
-                meshH = meshDimensions.second,
-                imageWidth = imageDimensions.first,
-                imageHeight = imageDimensions.second,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(imageAspect)
-            )
-        }
-
-        // Convergence visualization overlay (shown while dragging convergence slider)
+        // Convergence visualization overlay
         if (isAdjustingConvergence && normalizedDepth != null && depthImage != null) {
             ConvergenceOverlay(
                 normalizedDepth = normalizedDepth,
@@ -303,7 +334,7 @@ private fun ImagePreviewArea(
                 depthHeight = 756,
                 modifier = Modifier
                     .fillMaxWidth()
-                    .aspectRatio(imageAspect)
+                    .aspectRatio(imageAspect, matchHeightConstraintsFirst = true)
                     .clip(RoundedCornerShape(8.dp))
             )
         }
@@ -313,7 +344,7 @@ private fun ImagePreviewArea(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .aspectRatio(imageAspect)
+                    .aspectRatio(imageAspect, matchHeightConstraintsFirst = true)
                     .clip(RoundedCornerShape(8.dp))
                     .background(Color.Black.copy(alpha = 0.5f)),
                 contentAlignment = Alignment.Center
@@ -331,7 +362,7 @@ private fun ImagePreviewArea(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .aspectRatio(imageAspect)
+                    .aspectRatio(imageAspect, matchHeightConstraintsFirst = true)
                     .clip(RoundedCornerShape(8.dp))
                     .background(Color.Black.copy(alpha = 0.3f)),
                 contentAlignment = Alignment.Center
@@ -340,93 +371,6 @@ private fun ImagePreviewArea(
                     CircularProgressIndicator(color = Color.White)
                     Spacer(modifier = Modifier.height(8.dp))
                     Text("Generating 3D...", style = MaterialTheme.typography.bodyMedium, color = Color.White)
-                }
-            }
-        }
-
-        // Toggle buttons (bottom-right, only after SBS generation)
-        if (hasSbsResult) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(imageAspect),
-                contentAlignment = Alignment.BottomEnd
-            ) {
-                Row(
-                    modifier = Modifier.padding(8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    // Wigglegram toggle
-                    TooltipBox(
-                        positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
-                        tooltip = { PlainTooltip { Text("Toggle wigglegram preview") } },
-                        state = rememberTooltipState()
-                    ) {
-                        IconButton(
-                            onClick = onToggleWigglegram,
-                            modifier = Modifier
-                                .size(40.dp)
-                                .background(
-                                    if (showWigglegram)
-                                        MaterialTheme.colorScheme.primary.copy(alpha = 0.9f)
-                                    else
-                                        Color.Black.copy(alpha = 0.5f),
-                                    CircleShape
-                                )
-                                .semantics { contentDescription = "Toggle wigglegram" }
-                        ) {
-                            // Left-right arrows icon
-                            Canvas(modifier = Modifier.size(20.dp)) {
-                                val iconColor = Color.White
-                                val sw = 2.dp.toPx()
-                                val cx = size.width / 2f
-                                val cy = size.height / 2f
-                                val arrowLen = size.width * 0.35f
-                                // Left arrow
-                                drawLine(iconColor, Offset(cx - arrowLen, cy), Offset(cx - arrowLen / 3, cy - arrowLen / 2), sw, StrokeCap.Round)
-                                drawLine(iconColor, Offset(cx - arrowLen, cy), Offset(cx - arrowLen / 3, cy + arrowLen / 2), sw, StrokeCap.Round)
-                                // Right arrow
-                                drawLine(iconColor, Offset(cx + arrowLen, cy), Offset(cx + arrowLen / 3, cy - arrowLen / 2), sw, StrokeCap.Round)
-                                drawLine(iconColor, Offset(cx + arrowLen, cy), Offset(cx + arrowLen / 3, cy + arrowLen / 2), sw, StrokeCap.Round)
-                            }
-                        }
-                    }
-
-                    // Mesh toggle
-                    if (meshVerts != null) {
-                        TooltipBox(
-                            positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
-                            tooltip = { PlainTooltip { Text("Toggle mesh wireframe visualization") } },
-                            state = rememberTooltipState()
-                        ) {
-                            IconButton(
-                                onClick = onToggleMesh,
-                                modifier = Modifier
-                                    .size(40.dp)
-                                    .background(
-                                        if (showMeshOverlay)
-                                            MaterialTheme.colorScheme.primary.copy(alpha = 0.9f)
-                                        else
-                                            Color.Black.copy(alpha = 0.5f),
-                                        CircleShape
-                                    )
-                                    .semantics { contentDescription = "Toggle mesh overlay" }
-                            ) {
-                                Canvas(modifier = Modifier.size(20.dp)) {
-                                    val gridColor = Color.White
-                                    val sw = 1.5.dp.toPx()
-                                    val w = size.width
-                                    val h = size.height
-                                    for (i in 0..3) {
-                                        val x = w * i / 3f
-                                        val y = h * i / 3f
-                                        drawLine(gridColor, Offset(x, 0f), Offset(x, h), sw)
-                                        drawLine(gridColor, Offset(0f, y), Offset(w, y), sw)
-                                    }
-                                }
-                            }
-                        }
-                    }
                 }
             }
         }
@@ -443,7 +387,7 @@ private fun ImagePreviewArea(
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .aspectRatio(imageAspect),
+                    .aspectRatio(imageAspect, matchHeightConstraintsFirst = true),
                 contentAlignment = Alignment.BottomStart
             ) {
                 TooltipBox(
@@ -508,14 +452,13 @@ private fun DepthRevealSlider(
 ) {
     var progress by remember { mutableFloatStateOf(0.5f) }
 
-    // Reset to center when images change
     LaunchedEffect(originalImage, depthImage) {
         progress = 0.5f
     }
 
     Box(
         modifier = modifier
-            .aspectRatio(originalImage.width.toFloat() / originalImage.height.toFloat())
+            .aspectRatio(originalImage.width.toFloat() / originalImage.height.toFloat(), matchHeightConstraintsFirst = true)
             .semantics { contentDescription = "Depth reveal slider" }
             .pointerInput(Unit) {
                 awaitPointerEventScope {
@@ -530,7 +473,6 @@ private fun DepthRevealSlider(
                 }
             }
     ) {
-        // Bottom layer: depth image (full, unclipped)
         Image(
             bitmap = depthImage,
             contentDescription = "Depth map",
@@ -538,7 +480,6 @@ private fun DepthRevealSlider(
             modifier = Modifier.fillMaxSize()
         )
 
-        // Top layer: original image (clipped from left to split point)
         Image(
             bitmap = originalImage,
             contentDescription = "Original image",
@@ -547,8 +488,7 @@ private fun DepthRevealSlider(
                 .fillMaxSize()
                 .drawWithContent {
                     clipRect(
-                        left = 0f,
-                        top = 0f,
+                        left = 0f, top = 0f,
                         right = size.width * progress,
                         bottom = size.height
                     ) {
@@ -557,67 +497,19 @@ private fun DepthRevealSlider(
                 }
         )
 
-        // Divider line + thumb
         Canvas(modifier = Modifier.fillMaxSize()) {
             val splitX = size.width * progress
-
-            // Vertical divider line
-            drawLine(
-                color = Color.White,
-                start = Offset(splitX, 0f),
-                end = Offset(splitX, size.height),
-                strokeWidth = 3.dp.toPx(),
-                cap = StrokeCap.Round
-            )
-
-            // Circular thumb
+            drawLine(Color.White, Offset(splitX, 0f), Offset(splitX, size.height), 3.dp.toPx(), StrokeCap.Round)
             val thumbCenter = Offset(splitX, size.height / 2f)
-            drawCircle(
-                color = Color.White,
-                radius = 14.dp.toPx(),
-                center = thumbCenter
-            )
-            drawCircle(
-                color = Color.Black.copy(alpha = 0.3f),
-                radius = 12.dp.toPx(),
-                center = thumbCenter
-            )
-
-            // Arrow indicators on thumb
+            drawCircle(Color.White, 14.dp.toPx(), thumbCenter)
+            drawCircle(Color.Black.copy(alpha = 0.3f), 12.dp.toPx(), thumbCenter)
             val arrowSize = 6.dp.toPx()
-            // Left arrow
-            drawLine(
-                color = Color.White,
-                start = Offset(splitX - arrowSize, thumbCenter.y),
-                end = Offset(splitX - arrowSize / 2, thumbCenter.y - arrowSize / 2),
-                strokeWidth = 2.dp.toPx(),
-                cap = StrokeCap.Round
-            )
-            drawLine(
-                color = Color.White,
-                start = Offset(splitX - arrowSize, thumbCenter.y),
-                end = Offset(splitX - arrowSize / 2, thumbCenter.y + arrowSize / 2),
-                strokeWidth = 2.dp.toPx(),
-                cap = StrokeCap.Round
-            )
-            // Right arrow
-            drawLine(
-                color = Color.White,
-                start = Offset(splitX + arrowSize, thumbCenter.y),
-                end = Offset(splitX + arrowSize / 2, thumbCenter.y - arrowSize / 2),
-                strokeWidth = 2.dp.toPx(),
-                cap = StrokeCap.Round
-            )
-            drawLine(
-                color = Color.White,
-                start = Offset(splitX + arrowSize, thumbCenter.y),
-                end = Offset(splitX + arrowSize / 2, thumbCenter.y + arrowSize / 2),
-                strokeWidth = 2.dp.toPx(),
-                cap = StrokeCap.Round
-            )
+            drawLine(Color.White, Offset(splitX - arrowSize, thumbCenter.y), Offset(splitX - arrowSize / 2, thumbCenter.y - arrowSize / 2), 2.dp.toPx(), StrokeCap.Round)
+            drawLine(Color.White, Offset(splitX - arrowSize, thumbCenter.y), Offset(splitX - arrowSize / 2, thumbCenter.y + arrowSize / 2), 2.dp.toPx(), StrokeCap.Round)
+            drawLine(Color.White, Offset(splitX + arrowSize, thumbCenter.y), Offset(splitX + arrowSize / 2, thumbCenter.y - arrowSize / 2), 2.dp.toPx(), StrokeCap.Round)
+            drawLine(Color.White, Offset(splitX + arrowSize, thumbCenter.y), Offset(splitX + arrowSize / 2, thumbCenter.y + arrowSize / 2), 2.dp.toPx(), StrokeCap.Round)
         }
 
-        // Labels
         Box(modifier = Modifier.fillMaxSize()) {
             Text(
                 text = "Original",
@@ -649,7 +541,6 @@ private fun WigglegramPreview(
     modifier: Modifier = Modifier,
     intervalMs: Long = 500L
 ) {
-    // Alternate between left eye (first half) and right eye (second half)
     var showLeftEye by remember { mutableStateOf(true) }
 
     LaunchedEffect(sbsImage) {
@@ -679,31 +570,25 @@ private fun ConvergenceOverlay(
     depthHeight: Int,
     modifier: Modifier = Modifier
 ) {
-    val popOutColor = Color(0x400064FF) // semi-transparent blue = pops out
-    val recedeColor = Color(0x40FF3200) // semi-transparent red = recedes
-    val contourColor = Color(0xFFFFFF00) // yellow contour line
+    val popOutColor = Color(0x400064FF)
+    val recedeColor = Color(0x40FF3200)
+    val contourColor = Color(0xFFFFFF00)
 
     Canvas(modifier = modifier.semantics { contentDescription = "Convergence visualization" }) {
         val scaleX = size.width / depthWidth
         val scaleY = size.height / depthHeight
-        val contourThreshold = 0.02f // how close to convergence to draw contour
+        val contourThreshold = 0.02f
         val pixelW = scaleX.coerceAtLeast(1f)
         val pixelH = scaleY.coerceAtLeast(1f)
-
-        // Sample at reduced resolution for performance (every 4th pixel)
         val step = 4
+
         for (y in 0 until depthHeight step step) {
             for (x in 0 until depthWidth step step) {
                 val depth = normalizedDepth[y * depthWidth + x]
                 val diff = depth - convergencePoint
-
-                val color = if (diff > contourThreshold) {
-                    popOutColor
-                } else if (diff < -contourThreshold) {
-                    recedeColor
-                } else {
-                    contourColor.copy(alpha = 0.7f)
-                }
+                val color = if (diff > contourThreshold) popOutColor
+                else if (diff < -contourThreshold) recedeColor
+                else contourColor.copy(alpha = 0.7f)
 
                 drawRect(
                     color = color,
@@ -715,101 +600,14 @@ private fun ConvergenceOverlay(
     }
 }
 
-@Composable
-private fun MeshWireframeOverlay(
-    verts: FloatArray,
-    meshW: Int,
-    meshH: Int,
-    imageWidth: Int,
-    imageHeight: Int,
-    modifier: Modifier = Modifier,
-    lineColor: Color = Color.Cyan.copy(alpha = 0.6f)
-) {
-    Canvas(
-        modifier = modifier.semantics { contentDescription = "Mesh wireframe overlay" }
-    ) {
-        val scaleX = size.width / imageWidth
-        val scaleY = size.height / imageHeight
-        val strokeWidthPx = 1.dp.toPx()
-
-        for (row in 0..meshH) {
-            for (col in 0..meshW) {
-                val idx = (row * (meshW + 1) + col) * 2
-                val x = verts[idx] * scaleX
-                val y = verts[idx + 1] * scaleY
-
-                // Horizontal edge (connect to right neighbor)
-                if (col < meshW) {
-                    val idxRight = idx + 2
-                    drawLine(
-                        color = lineColor,
-                        start = Offset(x, y),
-                        end = Offset(verts[idxRight] * scaleX, verts[idxRight + 1] * scaleY),
-                        strokeWidth = strokeWidthPx
-                    )
-                }
-
-                // Vertical edge (connect to bottom neighbor)
-                if (row < meshH) {
-                    val idxBelow = ((row + 1) * (meshW + 1) + col) * 2
-                    drawLine(
-                        color = lineColor,
-                        start = Offset(x, y),
-                        end = Offset(verts[idxBelow] * scaleX, verts[idxBelow + 1] * scaleY),
-                        strokeWidth = strokeWidthPx
-                    )
-                }
-            }
-        }
-    }
-}
-
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun SbsPreview(sbsImage: ImageBitmap, arrangement: SbsArrangement) {
-    TooltipBox(
-        positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
-        tooltip = { PlainTooltip { Text("Side-by-side 3D preview") } },
-        state = rememberTooltipState()
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 16.dp, vertical = 4.dp)
-                .semantics { contentDescription = "SBS 3D preview" }
-        ) {
-            Text(
-                "SBS 3D Result",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Text(
-                text = if (arrangement == SbsArrangement.PARALLEL) "Parallel (wall-eyed)" else "Cross-eye",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Image(
-                bitmap = sbsImage,
-                contentDescription = "Side-by-side 3D result",
-                contentScale = ContentScale.Fit,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(sbsImage.width.toFloat() / sbsImage.height.toFloat())
-                    .clip(RoundedCornerShape(6.dp))
-            )
-        }
-    }
-}
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun BottomControlPanel(
     config: ProcessingConfig,
     onConfigChange: (ProcessingConfig) -> Unit,
     onLoadImage: () -> Unit,
-    onGenerate: () -> Unit,
     onSave: () -> Unit,
+    onSliderFinished: () -> Unit,
     isModelReady: Boolean,
     hasDepth: Boolean,
     hasSbsResult: Boolean,
@@ -848,132 +646,157 @@ private fun BottomControlPanel(
                 Spacer(modifier = Modifier.height(8.dp))
             }
 
-            // 3D Strength slider
+            // Primary: 3D Strength slider
             TooltipBox(
                 positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
                 tooltip = { PlainTooltip { Text("Controls 3D depth intensity") } },
                 state = rememberTooltipState()
             ) {
                 Column(modifier = Modifier.semantics { contentDescription = "3D strength slider" }) {
-                    Text(
-                        "3D Strength: ${"%.1f".format(config.depthScale)}%",
-                        style = MaterialTheme.typography.bodySmall
-                    )
+                    Text("3D Strength: ${"%.1f".format(config.depthScale)}%", style = MaterialTheme.typography.bodySmall)
                     Slider(
                         value = config.depthScale,
                         onValueChange = { onConfigChange(config.copy(depthScale = it)) },
+                        onValueChangeFinished = onSliderFinished,
                         valueRange = 0.5f..8f,
                         enabled = isModelReady && hasDepth && !isAnyProcessing
                     )
                 }
             }
 
-            // Convergence slider
+            // Primary: Convergence slider
             TooltipBox(
                 positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
                 tooltip = { PlainTooltip { Text("Sets which depth appears at screen level. Higher values bring more of the scene in front of the screen.") } },
                 state = rememberTooltipState()
             ) {
                 Column(modifier = Modifier.semantics { contentDescription = "Convergence point slider" }) {
-                    Text(
-                        "Convergence: ${(config.convergencePoint * 100).toInt()}%",
-                        style = MaterialTheme.typography.bodySmall
-                    )
+                    Text("Convergence: ${(config.convergencePoint * 100).toInt()}%", style = MaterialTheme.typography.bodySmall)
                     Slider(
                         value = config.convergencePoint,
                         onValueChange = {
                             onConvergenceAdjusting(true)
                             onConfigChange(config.copy(convergencePoint = it))
                         },
-                        onValueChangeFinished = { onConvergenceAdjusting(false) },
+                        onValueChangeFinished = {
+                            onConvergenceAdjusting(false)
+                            onSliderFinished()
+                        },
                         valueRange = 0f..1f,
                         enabled = isModelReady && hasDepth && !isAnyProcessing
                     )
                 }
             }
 
-            // Depth Contrast (gamma) slider
+            // Advanced section (collapsed by default)
+            var showAdvanced by remember { mutableStateOf(false) }
+
             TooltipBox(
                 positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
-                tooltip = { PlainTooltip { Text("Amplifies subtle depth differences for more 3D pop") } },
+                tooltip = { PlainTooltip { Text("Show additional depth processing controls") } },
                 state = rememberTooltipState()
             ) {
-                Column(modifier = Modifier.semantics { contentDescription = "Depth contrast slider" }) {
-                    Text(
-                        "Depth Contrast: ${"%.1f".format(config.depthGamma)}",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    Slider(
-                        value = config.depthGamma,
-                        onValueChange = { onConfigChange(config.copy(depthGamma = it)) },
-                        valueRange = 0.2f..2f,
-                        enabled = isModelReady && hasDepth && !isAnyProcessing
-                    )
-                }
-            }
-
-            // Depth Smoothing slider
-            TooltipBox(
-                positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
-                tooltip = { PlainTooltip { Text("Smooths depth boundaries to reduce artifacts") } },
-                state = rememberTooltipState()
-            ) {
-                Column(modifier = Modifier.semantics { contentDescription = "Depth smoothing slider" }) {
-                    Text(
-                        "Depth Smoothing: ${config.depthBlurKernel}",
-                        style = MaterialTheme.typography.bodySmall
-                    )
-                    Slider(
-                        value = config.depthBlurKernel.toFloat(),
-                        onValueChange = { newVal ->
-                            val rounded = newVal.toInt().let { if (it % 2 == 0) it + 1 else it }
-                            onConfigChange(config.copy(depthBlurKernel = rounded.coerceIn(1, 33)))
-                        },
-                        valueRange = 1f..33f,
-                        steps = 15,
-                        enabled = isModelReady && hasDepth && !isAnyProcessing
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(4.dp))
-
-            // Arrangement toggle
-            TooltipBox(
-                positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
-                tooltip = { PlainTooltip { Text("Parallel for wall-eyed viewing, Cross-Eye for cross-eyed free-viewing") } },
-                state = rememberTooltipState()
-            ) {
-                SingleChoiceSegmentedButtonRow(
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .semantics { contentDescription = "Arrangement toggle" }
+                        .clickable { showAdvanced = !showAdvanced }
+                        .padding(vertical = 4.dp)
+                        .semantics { contentDescription = "Advanced settings toggle" },
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    SegmentedButton(
-                        selected = config.arrangement == SbsArrangement.PARALLEL,
-                        onClick = { onConfigChange(config.copy(arrangement = SbsArrangement.PARALLEL)) },
-                        shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2)
+                    Text("Advanced", style = MaterialTheme.typography.labelMedium)
+                    Spacer(Modifier.weight(1f))
+                    Text(
+                        if (showAdvanced) "▲" else "▼",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
+            AnimatedVisibility(visible = showAdvanced) {
+                Column {
+                    // Arrangement toggle
+                    TooltipBox(
+                        positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+                        tooltip = { PlainTooltip { Text("Parallel for wall-eyed viewing, Cross-Eye for cross-eyed free-viewing") } },
+                        state = rememberTooltipState()
                     ) {
-                        Text("Parallel")
+                        SingleChoiceSegmentedButtonRow(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .semantics { contentDescription = "Arrangement toggle" }
+                        ) {
+                            SegmentedButton(
+                                selected = config.arrangement == SbsArrangement.PARALLEL,
+                                onClick = {
+                                    onConfigChange(config.copy(arrangement = SbsArrangement.PARALLEL))
+                                    onSliderFinished()
+                                },
+                                shape = SegmentedButtonDefaults.itemShape(index = 0, count = 2)
+                            ) { Text("Parallel") }
+                            SegmentedButton(
+                                selected = config.arrangement == SbsArrangement.CROSS_EYED,
+                                onClick = {
+                                    onConfigChange(config.copy(arrangement = SbsArrangement.CROSS_EYED))
+                                    onSliderFinished()
+                                },
+                                shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2)
+                            ) { Text("Cross-Eye") }
+                        }
                     }
-                    SegmentedButton(
-                        selected = config.arrangement == SbsArrangement.CROSS_EYED,
-                        onClick = { onConfigChange(config.copy(arrangement = SbsArrangement.CROSS_EYED)) },
-                        shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2)
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    // Depth Contrast slider
+                    TooltipBox(
+                        positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+                        tooltip = { PlainTooltip { Text("Amplifies subtle depth differences for more 3D pop") } },
+                        state = rememberTooltipState()
                     ) {
-                        Text("Cross-Eye")
+                        Column(modifier = Modifier.semantics { contentDescription = "Depth contrast slider" }) {
+                            Text("Depth Contrast: ${"%.1f".format(config.depthGamma)}", style = MaterialTheme.typography.bodySmall)
+                            Slider(
+                                value = config.depthGamma,
+                                onValueChange = { onConfigChange(config.copy(depthGamma = it)) },
+                                onValueChangeFinished = onSliderFinished,
+                                valueRange = 0.2f..2f,
+                                enabled = isModelReady && hasDepth && !isAnyProcessing
+                            )
+                        }
+                    }
+
+                    // Edge Smoothing slider
+                    TooltipBox(
+                        positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+                        tooltip = { PlainTooltip { Text("Smooths depth boundaries to reduce artifacts") } },
+                        state = rememberTooltipState()
+                    ) {
+                        Column(modifier = Modifier.semantics { contentDescription = "Edge smoothing slider" }) {
+                            Text("Edge Smoothing: ${config.smoothingLabel}", style = MaterialTheme.typography.bodySmall)
+                            Slider(
+                                value = config.depthBlurKernel.toFloat(),
+                                onValueChange = { newVal ->
+                                    val rounded = newVal.toInt().let { if (it % 2 == 0) it + 1 else it }
+                                    onConfigChange(config.copy(depthBlurKernel = rounded.coerceIn(1, 33)))
+                                },
+                                onValueChangeFinished = onSliderFinished,
+                                valueRange = 1f..33f,
+                                steps = 15,
+                                enabled = isModelReady && hasDepth && !isAnyProcessing
+                            )
+                        }
                     }
                 }
             }
 
             Spacer(modifier = Modifier.height(8.dp))
 
-            // Button row
+            // Button row: Load Image + Save
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                // Load Image button
                 TooltipBox(
                     positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
                     tooltip = { PlainTooltip { Text("Select an image from gallery") } },
@@ -985,29 +808,9 @@ private fun BottomControlPanel(
                         modifier = Modifier
                             .weight(1f)
                             .semantics { contentDescription = "Load image button" }
-                    ) {
-                        Text("Load Image")
-                    }
+                    ) { Text("Load Image") }
                 }
 
-                // Generate 3D button
-                TooltipBox(
-                    positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
-                    tooltip = { PlainTooltip { Text("Generate side-by-side 3D image") } },
-                    state = rememberTooltipState()
-                ) {
-                    Button(
-                        onClick = onGenerate,
-                        enabled = isModelReady && hasDepth && !isAnyProcessing,
-                        modifier = Modifier
-                            .weight(1f)
-                            .semantics { contentDescription = "Generate 3D button" }
-                    ) {
-                        Text("Generate 3D")
-                    }
-                }
-
-                // Save button
                 TooltipBox(
                     positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
                     tooltip = { PlainTooltip { Text("Save SBS image to gallery") } },
@@ -1021,10 +824,7 @@ private fun BottomControlPanel(
                             .semantics { contentDescription = "Save to gallery button" }
                     ) {
                         if (isSaving) {
-                            CircularProgressIndicator(
-                                modifier = Modifier.size(16.dp),
-                                strokeWidth = 2.dp
-                            )
+                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                             Spacer(modifier = Modifier.width(4.dp))
                         }
                         Text(if (isSaving) "Saving" else "Save")

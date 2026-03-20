@@ -15,10 +15,15 @@ import com.example.sbsconverter.util.BitmapUtils
 import com.example.sbsconverter.util.GalleryUtils
 import com.example.sbsconverter.util.ModelManager
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+
+enum class ViewMode { DEPTH_COMPARE, SBS_RESULT, WIGGLEGRAM }
 
 class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -26,15 +31,17 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private var depthEstimator: DepthEstimator? = null
     private val imageProcessor = ImageProcessor()
 
-    // Cached raw depth map (518x518) — avoids re-running inference when tweaking settings
+    // Cached raw depth map — avoids re-running inference when tweaking settings
     private var cachedRawDepth: FloatArray? = null
 
     // Keep source bitmap for processing (used by SbsWarper)
     private var sourceBitmap: Bitmap? = null
 
-    // Keep backing bitmaps alive while Compose references them via ImageBitmap.
-    // asImageBitmap() wraps the original — recycling it while Compose is drawing crashes.
+    // Keep backing bitmaps alive while Compose references them via ImageBitmap
     private var depthBacking: Bitmap? = null
+
+    // Debounced auto-generation job
+    private var autoGenerateJob: Job? = null
 
     private val _isModelReady = MutableStateFlow(false)
     val isModelReady: StateFlow<Boolean> = _isModelReady
@@ -48,7 +55,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val _depthImage = MutableStateFlow<ImageBitmap?>(null)
     val depthImage: StateFlow<ImageBitmap?> = _depthImage
 
-    // Split processing states for distinct UI overlays
     private val _isEstimatingDepth = MutableStateFlow(false)
     val isEstimatingDepth: StateFlow<Boolean> = _isEstimatingDepth
 
@@ -86,8 +92,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val _showMeshOverlay = MutableStateFlow(false)
     val showMeshOverlay: StateFlow<Boolean> = _showMeshOverlay
 
-    private val _showWigglegram = MutableStateFlow(false)
-    val showWigglegram: StateFlow<Boolean> = _showWigglegram
+    // View mode for main preview area
+    private val _viewMode = MutableStateFlow(ViewMode.DEPTH_COMPARE)
+    val viewMode: StateFlow<ViewMode> = _viewMode
 
     // Normalized depth map for convergence visualization overlay
     private val _normalizedDepth = MutableStateFlow<FloatArray?>(null)
@@ -144,7 +151,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private fun resetForNewImage() {
-        // Clear UI state first so Compose stops referencing old bitmaps
+        autoGenerateJob?.cancel()
         _errorMessage.value = null
         _depthImage.value = null
         _originalImage.value = null
@@ -156,12 +163,10 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         _meshVerts.value = null
         _meshDimensions.value = null
         _showMeshOverlay.value = false
-        _showWigglegram.value = false
+        _viewMode.value = ViewMode.DEPTH_COMPARE
         _normalizedDepth.value = null
         cachedRawDepth = null
 
-        // Recycle old backing bitmaps now that UI refs are cleared.
-        // The previous sourceBitmap backed _originalImage, and depthBacking backed _depthImage.
         sourceBitmap?.recycle()
         sourceBitmap = null
         depthBacking?.recycle()
@@ -181,7 +186,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
         cachedRawDepth = depthMap
 
-        // Normalize depth for convergence visualization overlay
         val normalized = withContext(Dispatchers.Default) {
             BitmapUtils.normalizeDepthMap(depthMap)
         }
@@ -193,14 +197,25 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
         _inferenceTimeMs.value = System.currentTimeMillis() - startTime
 
-        // Recycle previous depth backing, then store new one
         depthBacking?.recycle()
         depthBacking = depthBmp
         _depthImage.value = depthBmp.asImageBitmap()
+
+        // Auto-generate SBS immediately after depth estimation
+        generateSbs()
     }
 
     fun updateConfig(config: ProcessingConfig) {
         _processingConfig.value = config
+    }
+
+    fun onSliderFinished() {
+        if (cachedRawDepth != null && sourceBitmap != null) {
+            autoGenerateJob?.cancel()
+            autoGenerateJob = viewModelScope.launch {
+                generateSbs()
+            }
+        }
     }
 
     fun generateSbs() {
@@ -210,7 +225,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             _isGeneratingSbs.value = true
             _errorMessage.value = null
             try {
-                // Clear UI ref first, then recycle previous SBS result
                 _sbsImage.value = null
                 _hasSbsResult.value = false
                 val oldSbs = sbsResult
@@ -219,6 +233,12 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
                 val startTime = System.currentTimeMillis()
                 val result = imageProcessor.processImage(bitmap, rawDepth, _processingConfig.value)
+
+                if (!isActive) {
+                    result.sbsBitmap.recycle()
+                    return@launch
+                }
+
                 _sbsGenerationTimeMs.value = System.currentTimeMillis() - startTime
 
                 sbsResult = result
@@ -226,6 +246,11 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 _sbsImage.value = result.sbsBitmap.asImageBitmap()
                 _meshVerts.value = result.meshVerts
                 _meshDimensions.value = Pair(result.meshW, result.meshH)
+
+                // Auto-switch to SBS result view
+                if (_viewMode.value == ViewMode.DEPTH_COMPARE) {
+                    _viewMode.value = ViewMode.SBS_RESULT
+                }
             } catch (e: Exception) {
                 _errorMessage.value = "SBS generation failed: ${e.message}"
             } finally {
@@ -234,12 +259,12 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun toggleMeshOverlay() {
-        _showMeshOverlay.value = !_showMeshOverlay.value
+    fun setViewMode(mode: ViewMode) {
+        _viewMode.value = mode
     }
 
-    fun toggleWigglegram() {
-        _showWigglegram.value = !_showWigglegram.value
+    fun toggleMeshOverlay() {
+        _showMeshOverlay.value = !_showMeshOverlay.value
     }
 
     fun saveSbsToGallery() {
@@ -263,6 +288,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     override fun onCleared() {
+        autoGenerateJob?.cancel()
         depthEstimator?.close()
         sourceBitmap?.recycle()
         depthBacking?.recycle()
