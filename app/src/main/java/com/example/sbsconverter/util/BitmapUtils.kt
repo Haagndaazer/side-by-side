@@ -13,7 +13,7 @@ import java.nio.FloatBuffer
 
 object BitmapUtils {
 
-    private const val MODEL_INPUT_SIZE = 518
+    private const val MODEL_INPUT_SIZE = 756
     private val MEAN = floatArrayOf(0.485f, 0.456f, 0.406f)
     private val STD = floatArrayOf(0.229f, 0.224f, 0.225f)
 

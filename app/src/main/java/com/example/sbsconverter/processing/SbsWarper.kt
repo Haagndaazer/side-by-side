@@ -9,7 +9,7 @@ import com.example.sbsconverter.model.SbsResult
 class SbsWarper {
 
     companion object {
-        private const val DEPTH_SIZE = 518
+        private const val DEPTH_SIZE = 756
         private const val MAX_MESH_DIM = 256
         private const val MESH_DIVISOR = 8
     }

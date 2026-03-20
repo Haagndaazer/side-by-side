@@ -13,16 +13,17 @@ class ImageProcessor {
 
     suspend fun processImage(
         sourceBitmap: Bitmap,
-        rawDepthMap518: FloatArray,
+        rawDepthMap: FloatArray,
         config: ProcessingConfig
     ): SbsResult = withContext(Dispatchers.Default) {
+        val depthSize = DepthEstimator.MODEL_INPUT_SIZE
         // Pipeline: normalize → histogram equalize → gamma remap → blur → warp
-        val normalized = BitmapUtils.normalizeDepthMap(rawDepthMap518)
+        val normalized = BitmapUtils.normalizeDepthMap(rawDepthMap)
         val equalized = BitmapUtils.equalizeDepthHistogram(normalized)
         val remapped = BitmapUtils.remapDepthGamma(equalized, config.depthGamma)
 
         val blurred = BitmapUtils.blurDepthMap(
-            remapped, 518, 518, config.depthBlurKernel
+            remapped, depthSize, depthSize, config.depthBlurKernel
         )
 
         warper.generateSbsPair(sourceBitmap, blurred, config)
