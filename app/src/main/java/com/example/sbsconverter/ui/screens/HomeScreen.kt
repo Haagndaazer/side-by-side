@@ -90,6 +90,7 @@ fun HomeScreen(viewModel: HomeViewModel) {
     val meshDimensions by viewModel.meshDimensions.collectAsState()
     val showMeshOverlay by viewModel.showMeshOverlay.collectAsState()
     val showWigglegram by viewModel.showWigglegram.collectAsState()
+    val normalizedDepth by viewModel.normalizedDepth.collectAsState()
     val imageDimensions by viewModel.imageDimensions.collectAsState()
     val isSaving by viewModel.isSaving.collectAsState()
     val saveSuccess by viewModel.saveSuccess.collectAsState()
@@ -113,6 +114,7 @@ fun HomeScreen(viewModel: HomeViewModel) {
     }
 
     val isAnyProcessing = isEstimatingDepth || isGeneratingSbs
+    var isAdjustingConvergence by remember { mutableStateOf(false) }
     val scrollState = rememberScrollState()
 
     // Auto-scroll to bottom when SBS result appears
@@ -161,6 +163,9 @@ fun HomeScreen(viewModel: HomeViewModel) {
                         sbsImage = sbsImage,
                         imageDimensions = imageDimensions,
                         hasSbsResult = hasSbsResult,
+                        isAdjustingConvergence = isAdjustingConvergence,
+                        normalizedDepth = normalizedDepth,
+                        convergencePoint = processingConfig.convergencePoint,
                         onToggleMesh = { viewModel.toggleMeshOverlay() },
                         onToggleWigglegram = { viewModel.toggleWigglegram() }
                     )
@@ -188,7 +193,8 @@ fun HomeScreen(viewModel: HomeViewModel) {
                 hasSbsResult = hasSbsResult,
                 isAnyProcessing = isAnyProcessing,
                 isSaving = isSaving,
-                errorMessage = errorMessage
+                errorMessage = errorMessage,
+                onConvergenceAdjusting = { isAdjustingConvergence = it }
             )
         }
     }
@@ -213,6 +219,9 @@ private fun ImagePreviewArea(
     sbsImage: ImageBitmap?,
     imageDimensions: Pair<Int, Int>?,
     hasSbsResult: Boolean,
+    isAdjustingConvergence: Boolean,
+    normalizedDepth: FloatArray?,
+    convergencePoint: Float,
     onToggleMesh: () -> Unit,
     onToggleWigglegram: () -> Unit
 ) {
@@ -282,6 +291,20 @@ private fun ImagePreviewArea(
                 modifier = Modifier
                     .fillMaxWidth()
                     .aspectRatio(imageAspect)
+            )
+        }
+
+        // Convergence visualization overlay (shown while dragging convergence slider)
+        if (isAdjustingConvergence && normalizedDepth != null && depthImage != null) {
+            ConvergenceOverlay(
+                normalizedDepth = normalizedDepth,
+                convergencePoint = convergencePoint,
+                depthWidth = 756,
+                depthHeight = 756,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(imageAspect)
+                    .clip(RoundedCornerShape(8.dp))
             )
         }
 
@@ -649,6 +672,50 @@ private fun WigglegramPreview(
 }
 
 @Composable
+private fun ConvergenceOverlay(
+    normalizedDepth: FloatArray,
+    convergencePoint: Float,
+    depthWidth: Int,
+    depthHeight: Int,
+    modifier: Modifier = Modifier
+) {
+    val popOutColor = Color(0x400064FF) // semi-transparent blue = pops out
+    val recedeColor = Color(0x40FF3200) // semi-transparent red = recedes
+    val contourColor = Color(0xFFFFFF00) // yellow contour line
+
+    Canvas(modifier = modifier.semantics { contentDescription = "Convergence visualization" }) {
+        val scaleX = size.width / depthWidth
+        val scaleY = size.height / depthHeight
+        val contourThreshold = 0.02f // how close to convergence to draw contour
+        val pixelW = scaleX.coerceAtLeast(1f)
+        val pixelH = scaleY.coerceAtLeast(1f)
+
+        // Sample at reduced resolution for performance (every 4th pixel)
+        val step = 4
+        for (y in 0 until depthHeight step step) {
+            for (x in 0 until depthWidth step step) {
+                val depth = normalizedDepth[y * depthWidth + x]
+                val diff = depth - convergencePoint
+
+                val color = if (diff > contourThreshold) {
+                    popOutColor
+                } else if (diff < -contourThreshold) {
+                    recedeColor
+                } else {
+                    contourColor.copy(alpha = 0.7f)
+                }
+
+                drawRect(
+                    color = color,
+                    topLeft = Offset(x * scaleX, y * scaleY),
+                    size = androidx.compose.ui.geometry.Size(pixelW * step, pixelH * step)
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun MeshWireframeOverlay(
     verts: FloatArray,
     meshW: Int,
@@ -748,7 +815,8 @@ private fun BottomControlPanel(
     hasSbsResult: Boolean,
     isAnyProcessing: Boolean,
     isSaving: Boolean,
-    errorMessage: String?
+    errorMessage: String?,
+    onConvergenceAdjusting: (Boolean) -> Unit
 ) {
     Surface(
         tonalElevation = 3.dp,
@@ -813,7 +881,11 @@ private fun BottomControlPanel(
                     )
                     Slider(
                         value = config.convergencePoint,
-                        onValueChange = { onConfigChange(config.copy(convergencePoint = it)) },
+                        onValueChange = {
+                            onConvergenceAdjusting(true)
+                            onConfigChange(config.copy(convergencePoint = it))
+                        },
+                        onValueChangeFinished = { onConvergenceAdjusting(false) },
                         valueRange = 0f..1f,
                         enabled = isModelReady && hasDepth && !isAnyProcessing
                     )

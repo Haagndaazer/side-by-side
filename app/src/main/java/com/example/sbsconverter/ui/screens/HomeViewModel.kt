@@ -89,6 +89,10 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val _showWigglegram = MutableStateFlow(false)
     val showWigglegram: StateFlow<Boolean> = _showWigglegram
 
+    // Normalized depth map for convergence visualization overlay
+    private val _normalizedDepth = MutableStateFlow<FloatArray?>(null)
+    val normalizedDepth: StateFlow<FloatArray?> = _normalizedDepth
+
     // Image dimensions for mesh coordinate mapping
     private val _imageDimensions = MutableStateFlow<Pair<Int, Int>?>(null)
     val imageDimensions: StateFlow<Pair<Int, Int>?> = _imageDimensions
@@ -153,6 +157,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         _meshDimensions.value = null
         _showMeshOverlay.value = false
         _showWigglegram.value = false
+        _normalizedDepth.value = null
         cachedRawDepth = null
 
         // Recycle old backing bitmaps now that UI refs are cleared.
@@ -175,6 +180,12 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         cachedRawDepth = depthMap
+
+        // Normalize depth for convergence visualization overlay
+        val normalized = withContext(Dispatchers.Default) {
+            BitmapUtils.normalizeDepthMap(depthMap)
+        }
+        _normalizedDepth.value = normalized
 
         val depthBmp = withContext(Dispatchers.Default) {
             BitmapUtils.depthToGrayscaleBitmap(depthMap, bitmap.width, bitmap.height)
