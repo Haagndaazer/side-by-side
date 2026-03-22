@@ -50,9 +50,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.painter.BitmapPainter
-import androidx.compose.ui.unit.IntOffset
-import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
@@ -536,27 +533,13 @@ private fun ResultPreview(resultUri: android.net.Uri, displayName: String) {
         if (bmp != null) resultImage = bmp.asImageBitmap()
     }
     resultImage?.let { img ->
-        // Show cross-eye (swapped halves) for easy validation preview
-        val halfWidth = img.width / 2
-        Row(
+        Image(
+            bitmap = img,
+            contentDescription = "SBS result for $displayName",
+            contentScale = ContentScale.FillWidth,
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(bottomStart = 12.dp, bottomEnd = 12.dp))
-        ) {
-            // Right half first (cross-eye)
-            Image(
-                painter = BitmapPainter(img, IntOffset(halfWidth, 0), IntSize(halfWidth, img.height)),
-                contentDescription = "Right eye",
-                contentScale = ContentScale.FillWidth,
-                modifier = Modifier.weight(1f)
-            )
-            // Left half second
-            Image(
-                painter = BitmapPainter(img, IntOffset.Zero, IntSize(halfWidth, img.height)),
-                contentDescription = "Left eye",
-                contentScale = ContentScale.FillWidth,
-                modifier = Modifier.weight(1f)
-            )
-        }
+        )
     }
 }

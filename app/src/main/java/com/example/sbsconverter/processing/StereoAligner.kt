@@ -3,6 +3,7 @@ package com.example.sbsconverter.processing
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Matrix
+import android.graphics.Rect
 import boofcv.abst.feature.detdesc.DetectDescribePoint
 import boofcv.android.ConvertBitmap
 import boofcv.factory.feature.detdesc.FactoryDetectDescribe
@@ -182,8 +183,8 @@ class StereoAligner {
         leftMatrix.postTranslate(outW / 2f, outH / 2f)
         leftMatrix.postTranslate(halfTx, halfTy)
 
-        val transformedLeft = Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888)
-        Canvas(transformedLeft).drawBitmap(leftBitmap, leftMatrix, null)
+        val rawLeft = Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888)
+        Canvas(rawLeft).drawBitmap(leftBitmap, leftMatrix, null)
 
         // 8b. Apply half transform to RIGHT image (correction direction)
         val rightMatrix = Matrix()
@@ -195,8 +196,45 @@ class StereoAligner {
         rightMatrix.postTranslate(outW / 2f, outH / 2f)
         rightMatrix.postTranslate(-halfTx, -halfTy)
 
-        val transformedRight = Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888)
-        Canvas(transformedRight).drawBitmap(rightBitmap, rightMatrix, null)
+        val rawRight = Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888)
+        Canvas(rawRight).drawBitmap(rightBitmap, rightMatrix, null)
+
+        // 9. Crop to remove black borders — find inner rectangle visible in both images
+        val cropRect = computeVisibleCropRect(
+            leftMatrix, leftBitmap.width, leftBitmap.height,
+            rightMatrix, rightBitmap.width, rightBitmap.height,
+            outW, outH
+        )
+
+        val croppedLeft: Bitmap
+        val croppedRight: Bitmap
+        if (cropRect != null && cropRect.width() > outW / 2 && cropRect.height() > outH / 2) {
+            croppedLeft = Bitmap.createBitmap(
+                rawLeft, cropRect.left, cropRect.top, cropRect.width(), cropRect.height()
+            )
+            croppedRight = Bitmap.createBitmap(
+                rawRight, cropRect.left, cropRect.top, cropRect.width(), cropRect.height()
+            )
+            rawLeft.recycle()
+            rawRight.recycle()
+        } else {
+            croppedLeft = rawLeft
+            croppedRight = rawRight
+        }
+
+        // 10. Second pass: translation-only refinement on cropped images
+        // Rotation + scale are already correct from first pass — just fix any
+        // positional shift introduced by the crop
+        val refinedRight = refineTranslation(croppedLeft, croppedRight)
+
+        val transformedLeft = croppedLeft
+        val transformedRight: Bitmap
+        if (refinedRight != null) {
+            croppedRight.recycle()
+            transformedRight = refinedRight
+        } else {
+            transformedRight = croppedRight
+        }
 
         val inlierRatio = result.inlierCount.toFloat() / srcPts.size
 
@@ -396,5 +434,194 @@ class StereoAligner {
             sum += d * d
         }
         return sqrt(sum)
+    }
+
+    /**
+     * Second-pass translation-only refinement on cropped images.
+     * Rotation and scale are already corrected — just fix any positional shift
+     * from the crop step. Uses median displacement of feature matches.
+     * Returns a new shifted right bitmap, or null if refinement isn't needed/possible.
+     */
+    private fun refineTranslation(leftBitmap: Bitmap, rightBitmap: Bitmap): Bitmap? {
+        val scale = ALIGNMENT_SIZE.toFloat() / maxOf(leftBitmap.width, leftBitmap.height)
+
+        val leftSmall = Bitmap.createScaledBitmap(
+            leftBitmap,
+            (leftBitmap.width * scale).toInt().coerceAtLeast(1),
+            (leftBitmap.height * scale).toInt().coerceAtLeast(1),
+            true
+        )
+        val rightSmall = Bitmap.createScaledBitmap(
+            rightBitmap,
+            (rightBitmap.width * scale).toInt().coerceAtLeast(1),
+            (rightBitmap.height * scale).toInt().coerceAtLeast(1),
+            true
+        )
+
+        val leftGray = GrayF32(leftSmall.width, leftSmall.height)
+        val rightGray = GrayF32(rightSmall.width, rightSmall.height)
+        ConvertBitmap.bitmapToGray(leftSmall, leftGray, null)
+        ConvertBitmap.bitmapToGray(rightSmall, rightGray, null)
+
+        if (leftSmall !== leftBitmap) leftSmall.recycle()
+        if (rightSmall !== rightBitmap) rightSmall.recycle()
+
+        val detector: DetectDescribePoint<GrayF32, TupleDesc_F64> =
+            FactoryDetectDescribe.surfStable(null, null, null, GrayF32::class.java)
+
+        detector.detect(leftGray)
+        val leftPoints = mutableListOf<Point2D_F64>()
+        val leftDescs = mutableListOf<TupleDesc_F64>()
+        for (i in 0 until detector.numberOfFeatures) {
+            leftPoints.add(detector.getLocation(i).copy())
+            leftDescs.add(detector.getDescription(i).copy())
+        }
+
+        detector.detect(rightGray)
+        val rightPoints = mutableListOf<Point2D_F64>()
+        val rightDescs = mutableListOf<TupleDesc_F64>()
+        for (i in 0 until detector.numberOfFeatures) {
+            rightPoints.add(detector.getLocation(i).copy())
+            rightDescs.add(detector.getDescription(i).copy())
+        }
+
+        if (leftDescs.isEmpty() || rightDescs.isEmpty()) return null
+
+        // Match with cross-check
+        val dxList = mutableListOf<Double>()
+        val dyList = mutableListOf<Double>()
+
+        // Build right-to-left lookup first
+        val rlBest = IntArray(rightDescs.size) { -1 }
+        for (j in rightDescs.indices) {
+            var bestDist = Double.MAX_VALUE
+            var bestIdx = -1
+            for (i in leftDescs.indices) {
+                val dist = descriptorDistance(rightDescs[j], leftDescs[i])
+                if (dist < bestDist) { bestDist = dist; bestIdx = i }
+            }
+            rlBest[j] = bestIdx
+        }
+
+        for (i in leftDescs.indices) {
+            var bestDist = Double.MAX_VALUE
+            var secondBest = Double.MAX_VALUE
+            var bestIdx = -1
+
+            for (j in rightDescs.indices) {
+                val dist = descriptorDistance(leftDescs[i], rightDescs[j])
+                if (dist < bestDist) { secondBest = bestDist; bestDist = dist; bestIdx = j }
+                else if (dist < secondBest) { secondBest = dist }
+            }
+
+            if (bestIdx >= 0 && bestDist < 0.75 * secondBest && rlBest[bestIdx] == i) {
+                // Only keep vertical displacement (horizontal is parallax, don't correct it)
+                dyList.add(rightPoints[bestIdx].y - leftPoints[i].y)
+                dxList.add(rightPoints[bestIdx].x - leftPoints[i].x)
+            }
+        }
+
+        if (dyList.size < 3) return null
+
+        // Use median for robustness
+        dyList.sort()
+        val medianDy = dyList[dyList.size / 2]
+
+        // Only correct vertical shift — horizontal shift is parallax (intentional)
+        val verticalShift = -(medianDy / scale).toFloat()
+
+        // Skip if shift is negligible (< 1 pixel)
+        if (abs(verticalShift) < 1f) return null
+
+        val matrix = Matrix()
+        matrix.postTranslate(0f, verticalShift)
+
+        val refined = Bitmap.createBitmap(leftBitmap.width, leftBitmap.height, Bitmap.Config.ARGB_8888)
+        Canvas(refined).drawBitmap(rightBitmap, matrix, null)
+        return refined
+    }
+
+    /**
+     * Compute the largest axis-aligned rectangle visible in both transformed images.
+     * Maps the four corners of each source through its transform matrix, then finds
+     * the inner bounds that avoid all black border regions.
+     */
+    private fun computeVisibleCropRect(
+        leftMatrix: Matrix, leftW: Int, leftH: Int,
+        rightMatrix: Matrix, rightW: Int, rightH: Int,
+        outW: Int, outH: Int
+    ): Rect? {
+        // Map corners of each source image through their transforms
+        val leftCorners = floatArrayOf(
+            0f, 0f, leftW.toFloat(), 0f,
+            leftW.toFloat(), leftH.toFloat(), 0f, leftH.toFloat()
+        )
+        leftMatrix.mapPoints(leftCorners)
+
+        val rightCorners = floatArrayOf(
+            0f, 0f, rightW.toFloat(), 0f,
+            rightW.toFloat(), rightH.toFloat(), 0f, rightH.toFloat()
+        )
+        rightMatrix.mapPoints(rightCorners)
+
+        // Find the inner bounding box for each set of mapped corners
+        // (the largest rect fully inside the transformed image)
+        fun innerBounds(corners: FloatArray): Rect {
+            // corners: [x0,y0, x1,y1, x2,y2, x3,y3]
+            var maxLeft = Float.MIN_VALUE
+            var maxTop = Float.MIN_VALUE
+            var minRight = Float.MAX_VALUE
+            var minBottom = Float.MAX_VALUE
+
+            for (i in 0 until 4) {
+                val x = corners[i * 2]
+                val y = corners[i * 2 + 1]
+
+                // Left edge: max of left-side x coordinates
+                // Top edge: max of top-side y coordinates
+                // Right edge: min of right-side x coordinates
+                // Bottom edge: min of bottom-side y coordinates
+                maxLeft = maxOf(maxLeft, x)
+                maxTop = maxOf(maxTop, y)
+                minRight = minOf(minRight, x)
+                minBottom = minOf(minBottom, y)
+            }
+
+            // The inner rect is bounded by:
+            // left = max of the two left-most x corners (TL, BL)
+            // top = max of the two top-most y corners (TL, TR)
+            // right = min of the two right-most x corners (TR, BR)
+            // bottom = min of the two bottom-most y corners (BL, BR)
+            // For a rotated rectangle, we need the actual inner axis-aligned rect
+            val xs = FloatArray(4) { corners[it * 2] }
+            val ys = FloatArray(4) { corners[it * 2 + 1] }
+            xs.sort()
+            ys.sort()
+
+            // Inner rect: second-largest x as left, second-smallest x as...
+            // Actually for a convex quad, the inner AABB is:
+            // left = max(left-edge x values), right = min(right-edge x values)
+            // For sorted: left = xs[1], right = xs[2]  (skip the extreme corners)
+            // Same for y: top = ys[1], bottom = ys[2]
+            return Rect(
+                xs[1].toInt().coerceAtLeast(0),
+                ys[1].toInt().coerceAtLeast(0),
+                xs[2].toInt().coerceAtMost(outW),
+                ys[2].toInt().coerceAtMost(outH)
+            )
+        }
+
+        val leftBounds = innerBounds(leftCorners)
+        val rightBounds = innerBounds(rightCorners)
+
+        // Intersection of both inner bounds
+        val cropLeft = maxOf(leftBounds.left, rightBounds.left)
+        val cropTop = maxOf(leftBounds.top, rightBounds.top)
+        val cropRight = minOf(leftBounds.right, rightBounds.right)
+        val cropBottom = minOf(leftBounds.bottom, rightBounds.bottom)
+
+        if (cropRight <= cropLeft || cropBottom <= cropTop) return null
+
+        return Rect(cropLeft, cropTop, cropRight, cropBottom)
     }
 }
