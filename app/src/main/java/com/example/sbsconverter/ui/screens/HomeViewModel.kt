@@ -11,7 +11,6 @@ import com.example.sbsconverter.SbsApplication
 import com.example.sbsconverter.model.ProcessingConfig
 import com.example.sbsconverter.model.SbsResult
 import com.example.sbsconverter.util.BitmapUtils
-import com.example.sbsconverter.util.DepthAnalyzer
 import com.example.sbsconverter.util.GalleryUtils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -30,8 +29,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     // Cached raw depth map — avoids re-running inference when tweaking settings
     private var cachedRawDepth: FloatArray? = null
 
-    // Keep source bitmap for processing (used by SbsWarper)
+    // Keep source bitmap and URI for processing
     private var sourceBitmap: Bitmap? = null
+    private var sourceUri: android.net.Uri? = null
 
     // Keep backing bitmaps alive while Compose references them via ImageBitmap
     private var depthBacking: Bitmap? = null
@@ -114,6 +114,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 } ?: throw IllegalStateException("Failed to decode image")
 
                 sourceBitmap = bitmap
+                sourceUri = uri
                 _originalImage.value = bitmap.asImageBitmap()
                 _imageDimensions.value = Pair(bitmap.width, bitmap.height)
                 runDepthEstimation(bitmap)
@@ -144,6 +145,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
         sourceBitmap?.recycle()
         sourceBitmap = null
+        sourceUri = null
         depthBacking?.recycle()
         depthBacking = null
         sbsResult?.sbsBitmap?.recycle()
@@ -165,16 +167,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             BitmapUtils.normalizeDepthMap(depthMap)
         }
         _normalizedDepth.value = normalized
-
-        // Auto-tune strength and convergence from depth statistics
-        val autoParams = withContext(Dispatchers.Default) {
-            DepthAnalyzer.analyze(normalized)
-        }
-        val currentConfig = _processingConfig.value
-        _processingConfig.value = currentConfig.copy(
-            depthScale = autoParams.depthScale,
-            convergencePoint = autoParams.convergencePoint
-        )
 
         val depthBmp = withContext(Dispatchers.Default) {
             BitmapUtils.depthToGrayscaleBitmap(depthMap, bitmap.width, bitmap.height)
@@ -256,7 +248,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             _isSaving.value = true
             try {
-                val uri = GalleryUtils.saveBitmapToGallery(getApplication(), sbs)
+                val dateTaken = sourceUri?.let { GalleryUtils.getDateTaken(getApplication(), it) }
+                val uri = GalleryUtils.saveBitmapToGallery(getApplication(), sbs, dateTakenMs = dateTaken)
                 _saveSuccess.value = (uri != null)
             } catch (e: Exception) {
                 _errorMessage.value = "Save failed: ${e.message}"

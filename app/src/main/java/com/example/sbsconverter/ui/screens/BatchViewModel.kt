@@ -17,7 +17,6 @@ import com.example.sbsconverter.model.BatchPairItem
 import com.example.sbsconverter.model.ProcessingConfig
 import com.example.sbsconverter.processing.StereoAligner
 import com.example.sbsconverter.util.BitmapUtils
-import com.example.sbsconverter.util.DepthAnalyzer
 import com.example.sbsconverter.util.GalleryUtils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -168,12 +167,7 @@ class BatchViewModel(application: Application) : AndroidViewModel(application) {
                         estimator.estimateDepth(tensor)
                     }
 
-                    val normalized = BitmapUtils.normalizeDepthMap(rawDepth)
-                    val autoParams = DepthAnalyzer.analyze(normalized)
-                    val config = ProcessingConfig(
-                        depthScale = autoParams.depthScale,
-                        convergencePoint = autoParams.convergencePoint
-                    )
+                    val config = ProcessingConfig()
 
                     val result = withContext(Dispatchers.Default) {
                         processor.processImage(bitmap, rawDepth, config)
@@ -185,10 +179,12 @@ class BatchViewModel(application: Application) : AndroidViewModel(application) {
                         break
                     }
 
+                    val dateTaken = GalleryUtils.getDateTaken(context, item.uri)
                     val savedUri = withContext(Dispatchers.IO) {
                         GalleryUtils.saveBitmapToGallery(
                             context, result.sbsBitmap,
-                            "SBS_${item.displayName.substringBeforeLast(".")}_${System.currentTimeMillis()}"
+                            "SBS_${item.displayName.substringBeforeLast(".")}_${System.currentTimeMillis()}",
+                            dateTakenMs = dateTaken
                         )
                     }
 
@@ -242,9 +238,8 @@ class BatchViewModel(application: Application) : AndroidViewModel(application) {
                         aligner.align(leftBitmap, rightBitmap, _alignmentConfig.value)
                     }
 
-                    // Combine into SBS using both transformed images
-                    val arrangement = _alignmentConfig.value.arrangement
-                    val sbsBitmap = combinePairSbs(alignResult.transformedLeft, alignResult.transformedRight, arrangement)
+                    // Combine into SBS — parallel format (left eye left, right eye right)
+                    val sbsBitmap = combinePairSbs(alignResult.transformedLeft, alignResult.transformedRight, Arrangement.PARALLEL)
 
                     // Cleanup intermediates
                     alignResult.transformedLeft.recycle()
@@ -259,10 +254,12 @@ class BatchViewModel(application: Application) : AndroidViewModel(application) {
                         break
                     }
 
+                    val dateTaken = GalleryUtils.getDateTaken(context, pair.leftUri)
                     val savedUri = withContext(Dispatchers.IO) {
                         GalleryUtils.saveBitmapToGallery(
                             context, sbsBitmap,
-                            "SBS_PAIR_${pair.leftDisplayName.substringBeforeLast(".")}_${System.currentTimeMillis()}"
+                            "SBS_PAIR_${pair.leftDisplayName.substringBeforeLast(".")}_${System.currentTimeMillis()}",
+                            dateTakenMs = dateTaken
                         )
                     }
                     sbsBitmap.recycle()
