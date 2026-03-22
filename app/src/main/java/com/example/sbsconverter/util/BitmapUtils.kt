@@ -3,6 +3,7 @@ package com.example.sbsconverter.util
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.os.Build
 import android.graphics.Matrix
 import android.net.Uri
 import androidx.exifinterface.media.ExifInterface
@@ -267,6 +268,25 @@ object BitmapUtils {
         }
 
         return current
+    }
+
+    fun loadThumbnail(context: Context, uri: Uri, maxSize: Int = 128): Bitmap? {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            return try {
+                context.contentResolver.loadThumbnail(uri, android.util.Size(maxSize, maxSize), null)
+            } catch (_: Exception) { null }
+        }
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        context.contentResolver.openInputStream(uri)?.use {
+            BitmapFactory.decodeStream(it, null, bounds)
+        }
+        val sampleSize = maxOf(bounds.outWidth, bounds.outHeight) / maxSize
+        val opts = BitmapFactory.Options().apply {
+            inSampleSize = sampleSize.coerceAtLeast(1)
+        }
+        return context.contentResolver.openInputStream(uri)?.use {
+            BitmapFactory.decodeStream(it, null, opts)
+        }
     }
 
     fun loadBitmapFromAsset(context: Context, assetPath: String): Bitmap? {

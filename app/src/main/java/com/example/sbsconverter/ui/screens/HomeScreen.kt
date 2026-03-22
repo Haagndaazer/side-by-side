@@ -73,7 +73,7 @@ import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HomeScreen(viewModel: HomeViewModel) {
+fun HomeScreen(viewModel: HomeViewModel, onNavigateToBatch: () -> Unit = {}) {
     val isModelReady by viewModel.isModelReady.collectAsState()
     val modelLoadProgress by viewModel.modelLoadProgress.collectAsState()
     val originalImage by viewModel.originalImage.collectAsState()
@@ -201,6 +201,7 @@ fun HomeScreen(viewModel: HomeViewModel) {
                     )
                 },
                 onSave = { viewModel.saveSbsToGallery() },
+                onBatch = onNavigateToBatch,
                 onSliderFinished = { viewModel.onSliderFinished() },
                 isModelReady = isModelReady,
                 hasDepth = depthImage != null,
@@ -607,6 +608,7 @@ private fun BottomControlPanel(
     onConfigChange: (ProcessingConfig) -> Unit,
     onLoadImage: () -> Unit,
     onSave: () -> Unit,
+    onBatch: () -> Unit,
     onSliderFinished: () -> Unit,
     isModelReady: Boolean,
     hasDepth: Boolean,
@@ -809,6 +811,20 @@ private fun BottomControlPanel(
                             .weight(1f)
                             .semantics { contentDescription = "Load image button" }
                     ) { Text("Load Image") }
+                }
+
+                TooltipBox(
+                    positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+                    tooltip = { PlainTooltip { Text("Convert multiple photos to 3D") } },
+                    state = rememberTooltipState()
+                ) {
+                    Button(
+                        onClick = onBatch,
+                        enabled = isModelReady && !isAnyProcessing,
+                        modifier = Modifier
+                            .weight(0.7f)
+                            .semantics { contentDescription = "Batch convert button" }
+                    ) { Text("Batch") }
                 }
 
                 TooltipBox(

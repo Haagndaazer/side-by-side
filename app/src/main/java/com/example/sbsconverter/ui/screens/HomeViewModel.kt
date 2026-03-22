@@ -7,17 +7,14 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.sbsconverter.SbsApplication
 import com.example.sbsconverter.model.ProcessingConfig
 import com.example.sbsconverter.model.SbsResult
-import com.example.sbsconverter.processing.DepthEstimator
-import com.example.sbsconverter.processing.ImageProcessor
 import com.example.sbsconverter.util.BitmapUtils
 import com.example.sbsconverter.util.DepthAnalyzer
 import com.example.sbsconverter.util.GalleryUtils
-import com.example.sbsconverter.util.ModelManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
@@ -28,9 +25,7 @@ enum class ViewMode { DEPTH_COMPARE, SBS_RESULT, WIGGLEGRAM }
 
 class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val modelManager = ModelManager(application)
-    private var depthEstimator: DepthEstimator? = null
-    private val imageProcessor = ImageProcessor()
+    private val app = application as SbsApplication
 
     // Cached raw depth map — avoids re-running inference when tweaking settings
     private var cachedRawDepth: FloatArray? = null
@@ -44,11 +39,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     // Debounced auto-generation job
     private var autoGenerateJob: Job? = null
 
-    private val _isModelReady = MutableStateFlow(false)
-    val isModelReady: StateFlow<Boolean> = _isModelReady
-
-    private val _modelLoadProgress = MutableStateFlow(0f)
-    val modelLoadProgress: StateFlow<Float> = _modelLoadProgress
+    val isModelReady: StateFlow<Boolean> = app.isModelReady
+    val modelLoadProgress: StateFlow<Float> = app.modelLoadProgress
 
     private val _originalImage = MutableStateFlow<ImageBitmap?>(null)
     val originalImage: StateFlow<ImageBitmap?> = _originalImage
@@ -111,24 +103,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val _saveSuccess = MutableStateFlow<Boolean?>(null)
     val saveSuccess: StateFlow<Boolean?> = _saveSuccess
 
-    init {
-        viewModelScope.launch {
-            try {
-                modelManager.ensureModelReady { progress ->
-                    _modelLoadProgress.value = progress
-                }
-                val estimator = DepthEstimator(modelManager.getModelPath())
-                withContext(Dispatchers.Default) {
-                    estimator.initialize()
-                }
-                depthEstimator = estimator
-                _isModelReady.value = true
-            } catch (e: Exception) {
-                _errorMessage.value = "Failed to load model: ${e.message}"
-            }
-        }
-    }
-
     fun onImageSelected(uri: Uri) {
         val context = getApplication<Application>()
         viewModelScope.launch {
@@ -177,7 +151,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     private suspend fun runDepthEstimation(bitmap: Bitmap) {
-        val estimator = depthEstimator ?: throw IllegalStateException("Model not ready")
+        val estimator = app.depthEstimator ?: throw IllegalStateException("Model not ready")
         val startTime = System.currentTimeMillis()
 
         val depthMap = withContext(Dispatchers.Default) {
@@ -243,7 +217,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 oldSbs?.sbsBitmap?.recycle()
 
                 val startTime = System.currentTimeMillis()
-                val result = imageProcessor.processImage(bitmap, rawDepth, _processingConfig.value)
+                val result = app.imageProcessor.processImage(bitmap, rawDepth, _processingConfig.value)
 
                 if (!isActive) {
                     result.sbsBitmap.recycle()
@@ -258,7 +232,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 _meshVerts.value = result.meshVerts
                 _meshDimensions.value = Pair(result.meshW, result.meshH)
 
-                // Auto-switch to SBS result view
                 if (_viewMode.value == ViewMode.DEPTH_COMPARE) {
                     _viewMode.value = ViewMode.SBS_RESULT
                 }
@@ -300,7 +273,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         autoGenerateJob?.cancel()
-        depthEstimator?.close()
         sourceBitmap?.recycle()
         depthBacking?.recycle()
         sbsResult?.sbsBitmap?.recycle()
