@@ -1,6 +1,5 @@
 package com.example.sbsconverter.ui.screens
 
-import android.graphics.Bitmap
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -30,6 +29,9 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.PlainTooltip
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SegmentedButton
+import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TooltipBox
@@ -46,9 +48,11 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.painter.BitmapPainter
+import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
@@ -57,6 +61,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.sbsconverter.model.BatchItem
 import com.example.sbsconverter.model.BatchItemStatus
+import com.example.sbsconverter.model.BatchMode
+import com.example.sbsconverter.model.BatchPairItem
 import com.example.sbsconverter.util.BitmapUtils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -67,14 +73,16 @@ fun BatchScreen(
     viewModel: BatchViewModel,
     onNavigateBack: () -> Unit
 ) {
+    val batchMode by viewModel.batchMode.collectAsState()
     val items by viewModel.items.collectAsState()
+    val pairItems by viewModel.pairItems.collectAsState()
     val isProcessing by viewModel.isProcessing.collectAsState()
     val completedCount by viewModel.completedCount.collectAsState()
     val errorCount by viewModel.errorCount.collectAsState()
     val isModelReady by viewModel.isModelReady.collectAsState()
     val modelLoadProgress by viewModel.modelLoadProgress.collectAsState()
+    val oddImageWarning by viewModel.oddImageWarning.collectAsState()
 
-    // Block back while processing
     BackHandler(enabled = isProcessing) { /* blocked */ }
     BackHandler(enabled = !isProcessing) { onNavigateBack() }
 
@@ -83,6 +91,14 @@ fun BatchScreen(
     ) { uris ->
         if (uris.isNotEmpty()) viewModel.onImagesSelected(uris)
     }
+
+    // Determine if ready to work based on mode
+    val canOperate = if (batchMode == BatchMode.AUTO_3D) isModelReady else true
+    val totalCount = if (batchMode == BatchMode.AUTO_3D) items.size else pairItems.size
+    val hasPending = if (batchMode == BatchMode.AUTO_3D)
+        items.any { it.status == BatchItemStatus.PENDING }
+    else
+        pairItems.any { it.status == BatchItemStatus.PENDING }
 
     Scaffold(
         topBar = {
@@ -112,8 +128,35 @@ fun BatchScreen(
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            if (!isModelReady) {
-                // Model still loading
+            // Mode selector
+            TooltipBox(
+                positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+                tooltip = { PlainTooltip { Text("Switch between auto 3D from depth and stereo pair alignment") } },
+                state = rememberTooltipState()
+            ) {
+                SingleChoiceSegmentedButtonRow(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                        .semantics { contentDescription = "Batch mode selector" }
+                ) {
+                    SegmentedButton(
+                        selected = batchMode == BatchMode.AUTO_3D,
+                        onClick = { viewModel.setBatchMode(BatchMode.AUTO_3D) },
+                        shape = SegmentedButtonDefaults.itemShape(0, 2),
+                        enabled = !isProcessing
+                    ) { Text("Auto 3D") }
+                    SegmentedButton(
+                        selected = batchMode == BatchMode.PAIR_ALIGN,
+                        onClick = { viewModel.setBatchMode(BatchMode.PAIR_ALIGN) },
+                        shape = SegmentedButtonDefaults.itemShape(1, 2),
+                        enabled = !isProcessing
+                    ) { Text("Pair Align") }
+                }
+            }
+
+            // Model loading (only blocks Auto 3D mode)
+            if (batchMode == BatchMode.AUTO_3D && !isModelReady) {
                 Box(
                     modifier = Modifier.weight(1f).fillMaxWidth(),
                     contentAlignment = Alignment.Center
@@ -130,8 +173,18 @@ fun BatchScreen(
                     }
                 }
             } else {
+                // Odd image warning (pair mode)
+                if (oddImageWarning) {
+                    Text(
+                        "Odd number of photos — last image was dropped",
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                    )
+                }
+
                 // Summary card
-                if (items.isNotEmpty()) {
+                if (totalCount > 0) {
                     TooltipBox(
                         positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
                         tooltip = { PlainTooltip { Text("Batch processing progress") } },
@@ -144,17 +197,17 @@ fun BatchScreen(
                                 .semantics { contentDescription = "Batch progress summary" }
                         ) {
                             Column(modifier = Modifier.padding(16.dp)) {
-                                val pendingCount = items.count { it.status == BatchItemStatus.PENDING }
+                                val unitLabel = if (batchMode == BatchMode.PAIR_ALIGN) "pairs" else "photos"
                                 Text(
-                                    "${items.size} photos  |  $completedCount done  |  $errorCount errors  |  $pendingCount pending",
+                                    "$totalCount $unitLabel  |  $completedCount done  |  $errorCount errors",
                                     style = MaterialTheme.typography.bodyMedium
                                 )
                                 if (isProcessing || completedCount > 0) {
                                     Spacer(modifier = Modifier.height(8.dp))
                                     LinearProgressIndicator(
                                         progress = {
-                                            if (items.isEmpty()) 0f
-                                            else (completedCount + errorCount).toFloat() / items.size
+                                            if (totalCount == 0) 0f
+                                            else (completedCount + errorCount).toFloat() / totalCount
                                         },
                                         modifier = Modifier.fillMaxWidth()
                                     )
@@ -172,7 +225,7 @@ fun BatchScreen(
                         .padding(horizontal = 16.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
-                    if (items.isEmpty()) {
+                    if (totalCount == 0) {
                         item {
                             Box(
                                 modifier = Modifier
@@ -181,19 +234,36 @@ fun BatchScreen(
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text(
-                                    "Tap Select Photos to add images",
+                                    text = if (batchMode == BatchMode.AUTO_3D)
+                                        "Tap Select Photos to add images"
+                                    else
+                                        "Select photos in pairs (1st=left, 2nd=right)",
                                     style = MaterialTheme.typography.bodyLarge,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             }
                         }
                     }
-                    items(items, key = { it.id }) { item ->
-                        BatchItemRow(
-                            item = item,
-                            onRemove = { viewModel.removeItem(item.id) },
-                            canRemove = !isProcessing && item.status == BatchItemStatus.PENDING
-                        )
+
+                    when (batchMode) {
+                        BatchMode.AUTO_3D -> {
+                            items(items, key = { it.id }) { item ->
+                                BatchItemRow(
+                                    item = item,
+                                    onRemove = { viewModel.removeItem(item.id) },
+                                    canRemove = !isProcessing && item.status == BatchItemStatus.PENDING
+                                )
+                            }
+                        }
+                        BatchMode.PAIR_ALIGN -> {
+                            items(pairItems, key = { it.id }) { pair ->
+                                BatchPairItemRow(
+                                    pair = pair,
+                                    onRemove = { viewModel.removePairItem(pair.id) },
+                                    canRemove = !isProcessing && pair.status == BatchItemStatus.PENDING
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -220,7 +290,7 @@ fun BatchScreen(
                                     PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                                 )
                             },
-                            enabled = isModelReady && !isProcessing,
+                            enabled = canOperate && !isProcessing,
                             modifier = Modifier
                                 .weight(1f)
                                 .semantics { contentDescription = "Select photos button" }
@@ -241,7 +311,7 @@ fun BatchScreen(
                                 if (isProcessing) viewModel.cancelProcessing()
                                 else viewModel.startProcessing()
                             },
-                            enabled = isModelReady && (isProcessing || items.any { it.status == BatchItemStatus.PENDING }),
+                            enabled = canOperate && (isProcessing || hasPending),
                             modifier = Modifier
                                 .weight(1f)
                                 .semantics {
@@ -261,7 +331,7 @@ fun BatchScreen(
                         }
                     }
 
-                    if (!isProcessing && items.isNotEmpty()) {
+                    if (!isProcessing && totalCount > 0) {
                         TooltipBox(
                             positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
                             tooltip = { PlainTooltip { Text("Clear all items from queue") } },
@@ -287,134 +357,206 @@ private fun BatchItemRow(
     canRemove: Boolean
 ) {
     val context = LocalContext.current
-
-    // Load thumbnail asynchronously
     var thumbnail by remember(item.uri) { mutableStateOf<ImageBitmap?>(null) }
     LaunchedEffect(item.uri) {
-        val bmp = withContext(Dispatchers.IO) {
-            BitmapUtils.loadThumbnail(context, item.uri, 128)
-        }
-        if (bmp != null) {
-            thumbnail = bmp.asImageBitmap()
-        }
+        val bmp = withContext(Dispatchers.IO) { BitmapUtils.loadThumbnail(context, item.uri, 128) }
+        if (bmp != null) thumbnail = bmp.asImageBitmap()
     }
 
     Card(
         modifier = Modifier
             .fillMaxWidth()
-            .semantics {
-                contentDescription = when (item.status) {
-                    BatchItemStatus.PENDING -> "Queued: ${item.displayName}"
-                    BatchItemStatus.PROCESSING -> "Processing: ${item.displayName}"
-                    BatchItemStatus.DONE -> "Completed: ${item.displayName}"
-                    BatchItemStatus.ERROR -> "Error: ${item.displayName}"
-                }
-            }
+            .semantics { contentDescription = "${item.status.name}: ${item.displayName}" }
     ) {
         Column {
             Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(8.dp),
+                modifier = Modifier.fillMaxWidth().padding(8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Thumbnail
                 Box(
-                    modifier = Modifier
-                        .size(48.dp)
-                        .clip(RoundedCornerShape(4.dp))
+                    modifier = Modifier.size(48.dp).clip(RoundedCornerShape(4.dp))
                         .background(MaterialTheme.colorScheme.surfaceVariant),
                     contentAlignment = Alignment.Center
                 ) {
-                    if (thumbnail != null) {
-                        Image(
-                            bitmap = thumbnail!!,
-                            contentDescription = null,
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.fillMaxSize()
-                        )
+                    thumbnail?.let {
+                        Image(bitmap = it, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
                     }
                 }
-
-                Spacer(modifier = Modifier.width(12.dp))
-
-                // Name + status
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = item.displayName,
-                        style = MaterialTheme.typography.bodyMedium,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                    Text(
-                        text = when (item.status) {
-                            BatchItemStatus.PENDING -> "Pending"
-                            BatchItemStatus.PROCESSING -> "Processing..."
-                            BatchItemStatus.DONE -> "Saved"
-                            BatchItemStatus.ERROR -> item.errorMessage ?: "Error"
-                        },
-                        style = MaterialTheme.typography.bodySmall,
-                        color = when (item.status) {
-                            BatchItemStatus.DONE -> MaterialTheme.colorScheme.primary
-                            BatchItemStatus.ERROR -> MaterialTheme.colorScheme.error
-                            BatchItemStatus.PROCESSING -> MaterialTheme.colorScheme.tertiary
-                            else -> MaterialTheme.colorScheme.onSurfaceVariant
-                        }
-                    )
+                Spacer(Modifier.width(12.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(item.displayName, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    StatusText(item.status, item.errorMessage)
                 }
-
-                // Status icon / remove button
-                when {
-                    item.status == BatchItemStatus.PROCESSING -> {
-                        CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
-                    }
-                    item.status == BatchItemStatus.DONE -> {
-                        Text("✓", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
-                    }
-                    item.status == BatchItemStatus.ERROR -> {
-                        Text("✗", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.error)
-                    }
-                    canRemove -> {
-                        TooltipBox(
-                            positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
-                            tooltip = { PlainTooltip { Text("Remove from queue") } },
-                            state = rememberTooltipState()
-                        ) {
-                            IconButton(
-                                onClick = onRemove,
-                                modifier = Modifier
-                                    .size(32.dp)
-                                    .semantics { contentDescription = "Remove ${item.displayName}" }
-                            ) {
-                                Text("×", style = MaterialTheme.typography.titleMedium)
-                            }
-                        }
-                    }
-                }
+                StatusIcon(item.status, canRemove, onRemove, item.displayName)
             }
 
-            // Full-width SBS result preview for completed items
+            // SBS result preview
             if (item.status == BatchItemStatus.DONE && item.resultUri != null) {
-                var resultImage by remember(item.resultUri) { mutableStateOf<ImageBitmap?>(null) }
-                LaunchedEffect(item.resultUri) {
-                    val bmp = withContext(Dispatchers.IO) {
-                        BitmapUtils.loadThumbnail(context, item.resultUri, 1024)
-                    }
-                    if (bmp != null) {
-                        resultImage = bmp.asImageBitmap()
+                ResultPreview(item.resultUri, item.displayName)
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun BatchPairItemRow(
+    pair: BatchPairItem,
+    onRemove: () -> Unit,
+    canRemove: Boolean
+) {
+    val context = LocalContext.current
+    var leftThumb by remember(pair.leftUri) { mutableStateOf<ImageBitmap?>(null) }
+    var rightThumb by remember(pair.rightUri) { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(pair.leftUri) {
+        val bmp = withContext(Dispatchers.IO) { BitmapUtils.loadThumbnail(context, pair.leftUri, 96) }
+        if (bmp != null) leftThumb = bmp.asImageBitmap()
+    }
+    LaunchedEffect(pair.rightUri) {
+        val bmp = withContext(Dispatchers.IO) { BitmapUtils.loadThumbnail(context, pair.rightUri, 96) }
+        if (bmp != null) rightThumb = bmp.asImageBitmap()
+    }
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .semantics { contentDescription = "${pair.status.name}: ${pair.leftDisplayName} + ${pair.rightDisplayName}" }
+    ) {
+        Column {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                // Two thumbnails with "+" between
+                Box(
+                    modifier = Modifier.size(40.dp).clip(RoundedCornerShape(4.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                    contentAlignment = Alignment.Center
+                ) {
+                    leftThumb?.let {
+                        Image(bitmap = it, contentDescription = "Left eye", contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
                     }
                 }
-                resultImage?.let { img ->
-                    Image(
-                        bitmap = img,
-                        contentDescription = "SBS result for ${item.displayName}",
-                        contentScale = ContentScale.FillWidth,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(bottomStart = 12.dp, bottomEnd = 12.dp))
+                Text("+", style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.padding(horizontal = 4.dp))
+                Box(
+                    modifier = Modifier.size(40.dp).clip(RoundedCornerShape(4.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                    contentAlignment = Alignment.Center
+                ) {
+                    rightThumb?.let {
+                        Image(bitmap = it, contentDescription = "Right eye", contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                    }
+                }
+
+                Spacer(Modifier.width(8.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "${pair.leftDisplayName.take(15)} + ${pair.rightDisplayName.take(15)}",
+                        style = MaterialTheme.typography.bodySmall,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis
                     )
+                    StatusText(pair.status, pair.errorMessage)
+                }
+                StatusIcon(pair.status, canRemove, onRemove,
+                    "${pair.leftDisplayName} + ${pair.rightDisplayName}")
+            }
+
+            // SBS result preview
+            if (pair.status == BatchItemStatus.DONE && pair.resultUri != null) {
+                ResultPreview(pair.resultUri, pair.leftDisplayName)
+            }
+        }
+    }
+}
+
+@Composable
+private fun StatusText(status: BatchItemStatus, errorMessage: String?) {
+    Text(
+        text = when (status) {
+            BatchItemStatus.PENDING -> "Pending"
+            BatchItemStatus.PROCESSING -> "Processing..."
+            BatchItemStatus.DONE -> "Saved"
+            BatchItemStatus.ERROR -> errorMessage ?: "Error"
+        },
+        style = MaterialTheme.typography.bodySmall,
+        color = when (status) {
+            BatchItemStatus.DONE -> MaterialTheme.colorScheme.primary
+            BatchItemStatus.ERROR -> MaterialTheme.colorScheme.error
+            BatchItemStatus.PROCESSING -> MaterialTheme.colorScheme.tertiary
+            else -> MaterialTheme.colorScheme.onSurfaceVariant
+        }
+    )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun StatusIcon(
+    status: BatchItemStatus,
+    canRemove: Boolean,
+    onRemove: () -> Unit,
+    displayName: String
+) {
+    when {
+        status == BatchItemStatus.PROCESSING -> {
+            CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+        }
+        status == BatchItemStatus.DONE -> {
+            Text("✓", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+        }
+        status == BatchItemStatus.ERROR -> {
+            Text("✗", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.error)
+        }
+        canRemove -> {
+            TooltipBox(
+                positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+                tooltip = { PlainTooltip { Text("Remove from queue") } },
+                state = rememberTooltipState()
+            ) {
+                IconButton(
+                    onClick = onRemove,
+                    modifier = Modifier.size(32.dp)
+                        .semantics { contentDescription = "Remove $displayName" }
+                ) {
+                    Text("×", style = MaterialTheme.typography.titleMedium)
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun ResultPreview(resultUri: android.net.Uri, displayName: String) {
+    val context = LocalContext.current
+    var resultImage by remember(resultUri) { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(resultUri) {
+        val bmp = withContext(Dispatchers.IO) {
+            BitmapUtils.loadThumbnail(context, resultUri, 1024)
+        }
+        if (bmp != null) resultImage = bmp.asImageBitmap()
+    }
+    resultImage?.let { img ->
+        // Show cross-eye (swapped halves) for easy validation preview
+        val halfWidth = img.width / 2
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(bottomStart = 12.dp, bottomEnd = 12.dp))
+        ) {
+            // Right half first (cross-eye)
+            Image(
+                painter = BitmapPainter(img, IntOffset(halfWidth, 0), IntSize(halfWidth, img.height)),
+                contentDescription = "Right eye",
+                contentScale = ContentScale.FillWidth,
+                modifier = Modifier.weight(1f)
+            )
+            // Left half second
+            Image(
+                painter = BitmapPainter(img, IntOffset.Zero, IntSize(halfWidth, img.height)),
+                contentDescription = "Left eye",
+                contentScale = ContentScale.FillWidth,
+                modifier = Modifier.weight(1f)
+            )
         }
     }
 }

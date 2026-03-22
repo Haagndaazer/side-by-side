@@ -65,4 +65,7 @@ dependencies {
     implementation("com.microsoft.onnxruntime:onnxruntime-android:1.24.3")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
     implementation("androidx.exifinterface:exifinterface:1.3.7")
+
+    implementation("org.boofcv:boofcv-android:1.1.7")
+    implementation("org.boofcv:boofcv-core:1.1.7")
 }
