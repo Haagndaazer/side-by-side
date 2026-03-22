@@ -12,6 +12,7 @@ import com.example.sbsconverter.model.SbsResult
 import com.example.sbsconverter.processing.DepthEstimator
 import com.example.sbsconverter.processing.ImageProcessor
 import com.example.sbsconverter.util.BitmapUtils
+import com.example.sbsconverter.util.DepthAnalyzer
 import com.example.sbsconverter.util.GalleryUtils
 import com.example.sbsconverter.util.ModelManager
 import kotlinx.coroutines.Dispatchers
@@ -190,6 +191,16 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             BitmapUtils.normalizeDepthMap(depthMap)
         }
         _normalizedDepth.value = normalized
+
+        // Auto-tune strength and convergence from depth statistics
+        val autoParams = withContext(Dispatchers.Default) {
+            DepthAnalyzer.analyze(normalized)
+        }
+        val currentConfig = _processingConfig.value
+        _processingConfig.value = currentConfig.copy(
+            depthScale = autoParams.depthScale,
+            convergencePoint = autoParams.convergencePoint
+        )
 
         val depthBmp = withContext(Dispatchers.Default) {
             BitmapUtils.depthToGrayscaleBitmap(depthMap, bitmap.width, bitmap.height)
