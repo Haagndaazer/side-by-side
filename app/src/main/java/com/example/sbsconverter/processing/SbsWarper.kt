@@ -12,16 +12,27 @@ class SbsWarper {
         private const val DEPTH_SIZE = 756
         private const val MAX_MESH_DIM = 256
         private const val MESH_DIVISOR = 8
+        private const val EDGE_FADE_PERCENT = 0.02f
     }
+
+    private val depthEnhancer = DepthEnhancer()
 
     fun generateSbsPair(
         sourceBitmap: Bitmap,
-        normalizedDepth518: FloatArray,
+        normalizedDepth: FloatArray,
         config: ProcessingConfig
     ): SbsResult {
+        // Precompute gradient micro-parallax if surface detail is enabled
+        val gradientMap = if (config.surfaceDetail > 0f) {
+            val microStrength = config.surfaceDetail * 1.5f
+            depthEnhancer.computeGradientMicroParallax(
+                normalizedDepth, DEPTH_SIZE, DEPTH_SIZE, microStrength
+            )
+        } else null
+
         // Symmetric warping: both eyes shift by half disparity
-        val (leftEye, _, _, _) = warpEye(sourceBitmap, normalizedDepth518, isLeftEye = true, config)
-        val (rightEye, rightVerts, meshW, meshH) = warpEye(sourceBitmap, normalizedDepth518, isLeftEye = false, config)
+        val (leftEye, _, _, _) = warpEye(sourceBitmap, normalizedDepth, gradientMap, isLeftEye = true, config)
+        val (rightEye, rightVerts, meshW, meshH) = warpEye(sourceBitmap, normalizedDepth, gradientMap, isLeftEye = false, config)
         val combined = combineViews(leftEye, rightEye, sourceBitmap.width, sourceBitmap.height, config)
         leftEye.recycle()
         rightEye.recycle()
@@ -42,7 +53,8 @@ class SbsWarper {
 
     private fun warpEye(
         bitmap: Bitmap,
-        depth518: FloatArray,
+        depthMap: FloatArray,
+        gradientMap: FloatArray?,
         isLeftEye: Boolean,
         config: ProcessingConfig
     ): WarpResult {
@@ -58,6 +70,11 @@ class SbsWarper {
         val maxDisparity = config.depthScale / 100f * w / 2f
         val direction = if (isLeftEye) -1f else 1f
 
+        // Edge fade: ramp shift from 0 at the pulling edge to full at 2% inward.
+        // Left eye pulls left → fade at left edge (x near 0)
+        // Right eye pulls right → fade at right edge (x near w)
+        val fadeWidth = w * EDGE_FADE_PERCENT
+
         for (row in 0..meshH) {
             for (col in 0..meshW) {
                 val idx = (row * (meshW + 1) + col) * 2
@@ -66,11 +83,27 @@ class SbsWarper {
 
                 val depthX = (px / w * (DEPTH_SIZE - 1)).coerceIn(0f, (DEPTH_SIZE - 1).toFloat())
                 val depthY = (py / h * (DEPTH_SIZE - 1)).coerceIn(0f, (DEPTH_SIZE - 1).toFloat())
-                val depth = bilinearSample(depth518, DEPTH_SIZE, DEPTH_SIZE, depthX, depthY)
+                val depth = bilinearSample(depthMap, DEPTH_SIZE, DEPTH_SIZE, depthX, depthY)
 
                 val adjustedDepth = depth - config.convergencePoint
-                val shift = adjustedDepth * maxDisparity * direction
-                verts[idx] = (px + shift).coerceIn(0f, w.toFloat())
+                val baseShift = adjustedDepth * maxDisparity * direction
+
+                // Add gradient micro-parallax if available
+                val gradShift = if (gradientMap != null) {
+                    bilinearSample(gradientMap, DEPTH_SIZE, DEPTH_SIZE, depthX, depthY) * direction
+                } else 0f
+
+                // Apply edge fade on the trailing side (where pixels shift away from)
+                val edgeFade = if (isLeftEye) {
+                    // Left eye shifts left → right edge loses pixels
+                    ((w - px) / fadeWidth).coerceIn(0f, 1f)
+                } else {
+                    // Right eye shifts right → left edge loses pixels
+                    (px / fadeWidth).coerceIn(0f, 1f)
+                }
+
+                val totalShift = (baseShift + gradShift) * edgeFade
+                verts[idx] = (px + totalShift).coerceIn(0f, w.toFloat())
                 verts[idx + 1] = py
             }
         }

@@ -80,6 +80,7 @@ fun HomeScreen(viewModel: HomeViewModel, onNavigateToBatch: () -> Unit = {}) {
     val depthImage by viewModel.depthImage.collectAsState()
     val isEstimatingDepth by viewModel.isEstimatingDepth.collectAsState()
     val isGeneratingSbs by viewModel.isGeneratingSbs.collectAsState()
+    val isEnhancingDepth by viewModel.isEnhancingDepth.collectAsState()
     val errorMessage by viewModel.errorMessage.collectAsState()
     val inferenceTimeMs by viewModel.inferenceTimeMs.collectAsState()
     val processingConfig by viewModel.processingConfig.collectAsState()
@@ -94,6 +95,7 @@ fun HomeScreen(viewModel: HomeViewModel, onNavigateToBatch: () -> Unit = {}) {
 
     val snackbarHostState = remember { SnackbarHostState() }
     var isAdjustingConvergence by remember { mutableStateOf(false) }
+    var isAdjustingSurfaceDetail by remember { mutableStateOf(false) }
 
     val pickMedia = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
@@ -177,6 +179,7 @@ fun HomeScreen(viewModel: HomeViewModel, onNavigateToBatch: () -> Unit = {}) {
                     depthImage = depthImage,
                     isEstimatingDepth = isEstimatingDepth,
                     isGeneratingSbs = isGeneratingSbs,
+                    isEnhancingDepth = isEnhancingDepth,
                     errorMessage = errorMessage,
                     inferenceTimeMs = inferenceTimeMs,
                     sbsGenerationTimeMs = sbsGenerationTimeMs,
@@ -185,6 +188,7 @@ fun HomeScreen(viewModel: HomeViewModel, onNavigateToBatch: () -> Unit = {}) {
                     imageDimensions = imageDimensions,
                     hasSbsResult = hasSbsResult,
                     isAdjustingConvergence = isAdjustingConvergence,
+                    isAdjustingSurfaceDetail = isAdjustingSurfaceDetail,
                     normalizedDepth = normalizedDepth,
                     convergencePoint = processingConfig.convergencePoint,
                     arrangement = processingConfig.arrangement
@@ -209,7 +213,9 @@ fun HomeScreen(viewModel: HomeViewModel, onNavigateToBatch: () -> Unit = {}) {
                 isAnyProcessing = isAnyProcessing,
                 isSaving = isSaving,
                 errorMessage = errorMessage,
-                onConvergenceAdjusting = { isAdjustingConvergence = it }
+                onConvergenceAdjusting = { isAdjustingConvergence = it },
+                onSurfaceDetailAdjusting = { isAdjustingSurfaceDetail = it },
+                onSurfaceDetailFinished = { viewModel.refreshEnhancedDepthPreview() }
             )
         }
     }
@@ -224,6 +230,7 @@ private fun ImagePreviewArea(
     depthImage: ImageBitmap?,
     isEstimatingDepth: Boolean,
     isGeneratingSbs: Boolean,
+    isEnhancingDepth: Boolean,
     errorMessage: String?,
     inferenceTimeMs: Long?,
     sbsGenerationTimeMs: Long?,
@@ -232,6 +239,7 @@ private fun ImagePreviewArea(
     imageDimensions: Pair<Int, Int>?,
     hasSbsResult: Boolean,
     isAdjustingConvergence: Boolean,
+    isAdjustingSurfaceDetail: Boolean,
     normalizedDepth: FloatArray?,
     convergencePoint: Float,
     arrangement: SbsArrangement
@@ -262,8 +270,8 @@ private fun ImagePreviewArea(
             (imageDimensions?.second ?: originalImage.height).toFloat()
 
     Box(contentAlignment = Alignment.Center) {
-        // Main preview based on view mode (force depth compare while adjusting convergence)
-        val effectiveMode = if (isAdjustingConvergence && depthImage != null) null else viewMode
+        // Main preview based on view mode (force depth compare while adjusting convergence or surface detail)
+        val effectiveMode = if ((isAdjustingConvergence || isAdjustingSurfaceDetail) && depthImage != null) null else viewMode
         when {
             hasSbsResult && effectiveMode == ViewMode.SBS_RESULT && sbsImage != null -> {
                 // SBS result view
@@ -372,6 +380,24 @@ private fun ImagePreviewArea(
                     CircularProgressIndicator(color = Color.White)
                     Spacer(modifier = Modifier.height(8.dp))
                     Text("Generating 3D...", style = MaterialTheme.typography.bodyMedium, color = Color.White)
+                }
+            }
+        }
+
+        // Processing overlay (enhancing depth)
+        if (isEnhancingDepth) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .aspectRatio(imageAspect, matchHeightConstraintsFirst = true)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Color.Black.copy(alpha = 0.3f)),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    CircularProgressIndicator(color = Color.White)
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text("Enhancing depth...", style = MaterialTheme.typography.bodyMedium, color = Color.White)
                 }
             }
         }
@@ -616,7 +642,9 @@ private fun BottomControlPanel(
     isAnyProcessing: Boolean,
     isSaving: Boolean,
     errorMessage: String?,
-    onConvergenceAdjusting: (Boolean) -> Unit
+    onConvergenceAdjusting: (Boolean) -> Unit,
+    onSurfaceDetailAdjusting: (Boolean) -> Unit,
+    onSurfaceDetailFinished: () -> Unit
 ) {
     Surface(
         tonalElevation = 3.dp,
@@ -785,6 +813,30 @@ private fun BottomControlPanel(
                                 onValueChangeFinished = onSliderFinished,
                                 valueRange = 1f..33f,
                                 steps = 15,
+                                enabled = isModelReady && hasDepth && !isAnyProcessing
+                            )
+                        }
+                    }
+
+                    // Surface Detail slider
+                    TooltipBox(
+                        positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+                        tooltip = { PlainTooltip { Text("Enhances micro-depth surface detail like bumps, folds, and contours") } },
+                        state = rememberTooltipState()
+                    ) {
+                        Column(modifier = Modifier.semantics { contentDescription = "Surface detail slider" }) {
+                            Text("Surface Detail: ${"%.1f".format(config.surfaceDetail)}", style = MaterialTheme.typography.bodySmall)
+                            Slider(
+                                value = config.surfaceDetail,
+                                onValueChange = {
+                                    onSurfaceDetailAdjusting(true)
+                                    onConfigChange(config.copy(surfaceDetail = it))
+                                },
+                                onValueChangeFinished = {
+                                    onSurfaceDetailAdjusting(false)
+                                    onSurfaceDetailFinished()
+                                },
+                                valueRange = 0f..3f,
                                 enabled = isModelReady && hasDepth && !isAnyProcessing
                             )
                         }

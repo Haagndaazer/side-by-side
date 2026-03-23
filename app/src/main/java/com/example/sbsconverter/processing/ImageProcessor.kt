@@ -10,6 +10,7 @@ import kotlinx.coroutines.withContext
 class ImageProcessor {
 
     private val warper = SbsWarper()
+    private val depthEnhancer = DepthEnhancer()
 
     suspend fun processImage(
         sourceBitmap: Bitmap,
@@ -17,7 +18,7 @@ class ImageProcessor {
         config: ProcessingConfig
     ): SbsResult = withContext(Dispatchers.Default) {
         val depthSize = DepthEstimator.MODEL_INPUT_SIZE
-        // Pipeline: normalize → histogram equalize → gamma remap → blur → warp
+        // Pipeline: normalize → histogram equalize → gamma remap → blur → [enhance] → warp
         val normalized = BitmapUtils.normalizeDepthMap(rawDepthMap)
         val equalized = BitmapUtils.equalizeDepthHistogram(normalized)
         val remapped = BitmapUtils.remapDepthGamma(equalized, config.depthGamma)
@@ -26,6 +27,18 @@ class ImageProcessor {
             remapped, depthSize, depthSize, config.depthBlurKernel
         )
 
-        warper.generateSbsPair(sourceBitmap, blurred, config)
+        // Bilateral unsharp mask — amplify surface micro-detail (only if enabled)
+        val enhanced = if (config.surfaceDetail > 0f) {
+            depthEnhancer.bilateralUnsharpMask(
+                depth = blurred,
+                width = depthSize,
+                height = depthSize,
+                strength = config.surfaceDetail
+            )
+        } else {
+            blurred
+        }
+
+        warper.generateSbsPair(sourceBitmap, enhanced, config)
     }
 }

@@ -10,6 +10,8 @@ import androidx.lifecycle.viewModelScope
 import com.example.sbsconverter.SbsApplication
 import com.example.sbsconverter.model.ProcessingConfig
 import com.example.sbsconverter.model.SbsResult
+import com.example.sbsconverter.processing.DepthEnhancer
+import com.example.sbsconverter.processing.DepthEstimator
 import com.example.sbsconverter.util.BitmapUtils
 import com.example.sbsconverter.util.GalleryUtils
 import kotlinx.coroutines.Dispatchers
@@ -35,9 +37,14 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     // Keep backing bitmaps alive while Compose references them via ImageBitmap
     private var depthBacking: Bitmap? = null
+    private var enhancedDepthBacking: Bitmap? = null
+    private val depthEnhancer = DepthEnhancer()
 
     // Debounced auto-generation job
     private var autoGenerateJob: Job? = null
+
+    // Track whether depth params changed since last SBS generation
+    private var depthDirty = false
 
     val isModelReady: StateFlow<Boolean> = app.isModelReady
     val modelLoadProgress: StateFlow<Float> = app.modelLoadProgress
@@ -53,6 +60,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _isGeneratingSbs = MutableStateFlow(false)
     val isGeneratingSbs: StateFlow<Boolean> = _isGeneratingSbs
+
+    private val _isEnhancingDepth = MutableStateFlow(false)
+    val isEnhancingDepth: StateFlow<Boolean> = _isEnhancingDepth
 
     private val _errorMessage = MutableStateFlow<String?>(null)
     val errorMessage: StateFlow<String?> = _errorMessage
@@ -148,6 +158,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         sourceUri = null
         depthBacking?.recycle()
         depthBacking = null
+        enhancedDepthBacking?.recycle()
+        enhancedDepthBacking = null
         sbsResult?.sbsBitmap?.recycle()
         sbsResult = null
     }
@@ -178,6 +190,11 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         depthBacking = depthBmp
         _depthImage.value = depthBmp.asImageBitmap()
 
+        // If surface detail is enabled, update the depth visualization with enhancement
+        if (_processingConfig.value.surfaceDetail > 0f) {
+            refreshEnhancedDepthPreview(stayOnDepthView = false)
+        }
+
         // Auto-generate SBS immediately after depth estimation
         generateSbs()
     }
@@ -192,6 +209,49 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             autoGenerateJob = viewModelScope.launch {
                 generateSbs()
             }
+        }
+    }
+
+    /**
+     * Recompute the depth visualization with current processing config applied
+     * (including surface detail enhancement). Shows the effect of the bilateral
+     * unsharp mask in the depth reveal slider.
+     */
+    fun refreshEnhancedDepthPreview(stayOnDepthView: Boolean = true) {
+        val rawDepth = cachedRawDepth
+        val bitmap = sourceBitmap
+        val config = _processingConfig.value
+
+        if (rawDepth == null || bitmap == null) return
+
+        if (stayOnDepthView) {
+            _viewMode.value = ViewMode.DEPTH_COMPARE
+        }
+        _isEnhancingDepth.value = true
+
+        viewModelScope.launch {
+            val depthSize = DepthEstimator.MODEL_INPUT_SIZE
+            val enhancedBmp = withContext(Dispatchers.Default) {
+                val normalized = BitmapUtils.normalizeDepthMap(rawDepth)
+                val equalized = BitmapUtils.equalizeDepthHistogram(normalized)
+                val remapped = BitmapUtils.remapDepthGamma(equalized, config.depthGamma)
+                val blurred = BitmapUtils.blurDepthMap(remapped, depthSize, depthSize, config.depthBlurKernel)
+
+                val enhanced = if (config.surfaceDetail > 0f) {
+                    depthEnhancer.bilateralUnsharpMask(
+                        depth = blurred, width = depthSize, height = depthSize,
+                        strength = config.surfaceDetail
+                    )
+                } else blurred
+
+                BitmapUtils.depthToGrayscaleBitmap(enhanced, bitmap.width, bitmap.height)
+            }
+
+            enhancedDepthBacking?.recycle()
+            enhancedDepthBacking = enhancedBmp
+            _depthImage.value = enhancedBmp.asImageBitmap()
+            _isEnhancingDepth.value = false
+            depthDirty = true
         }
     }
 
@@ -220,6 +280,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
                 sbsResult = result
                 _hasSbsResult.value = true
+                depthDirty = false
                 _sbsImage.value = result.sbsBitmap.asImageBitmap()
                 _meshVerts.value = result.meshVerts
                 _meshDimensions.value = Pair(result.meshW, result.meshH)
@@ -237,6 +298,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     fun setViewMode(mode: ViewMode) {
         _viewMode.value = mode
+        if (depthDirty && (mode == ViewMode.SBS_RESULT || mode == ViewMode.WIGGLEGRAM)) {
+            generateSbs()
+        }
     }
 
     fun toggleMeshOverlay() {
@@ -268,6 +332,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         autoGenerateJob?.cancel()
         sourceBitmap?.recycle()
         depthBacking?.recycle()
+        enhancedDepthBacking?.recycle()
         sbsResult?.sbsBitmap?.recycle()
         super.onCleared()
     }
