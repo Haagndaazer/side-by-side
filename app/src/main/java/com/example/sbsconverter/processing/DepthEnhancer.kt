@@ -16,20 +16,52 @@ class DepthEnhancer : Closeable {
      * Extracts detail = original - bilateral_filtered, adds back scaled.
      * Output is clamped to [0,1] to prevent vertex fold artifacts.
      */
+    /**
+     * Bilateral Unsharp Mask — extracts micro-detail from the raw depth map
+     * and applies it to the processed depth map.
+     *
+     * Running the bilateral on raw (un-normalized) depth preserves the full
+     * dynamic range of the model's output, capturing surface detail that
+     * normalization + histogram equalization would flatten.
+     *
+     * @param rawDepth       Raw depth from the model (arbitrary range, float32)
+     * @param processedDepth Processed depth (normalized/equalized/gamma, [0,1])
+     * @param width          Depth map width
+     * @param height         Depth map height
+     * @param strength       Enhancement strength (0-3)
+     */
     fun bilateralUnsharpMask(
-        depth: FloatArray,
+        rawDepth: FloatArray,
+        processedDepth: FloatArray,
         width: Int,
         height: Int,
         spatialSigma: Float = 21.0f,
-        depthSigma: Float = 0.04f,
         strength: Float = 1.2f
     ): FloatArray {
-        val smoothed = bilateralFilter(depth, width, height, spatialSigma, depthSigma)
+        // Normalize raw depth to [0,1] for the bilateral filter's range kernel
+        // but keep the full precision of the raw values
+        var rawMin = Float.MAX_VALUE
+        var rawMax = Float.MIN_VALUE
+        for (v in rawDepth) {
+            if (v < rawMin) rawMin = v
+            if (v > rawMax) rawMax = v
+        }
+        val rawRange = rawMax - rawMin
+        val normalizedRaw = if (rawRange > 0f) {
+            FloatArray(rawDepth.size) { ((rawDepth[it] - rawMin) / rawRange).coerceIn(0f, 1f) }
+        } else rawDepth
 
-        val enhanced = FloatArray(depth.size)
-        for (i in depth.indices) {
-            val detail = depth[i] - smoothed[i]
-            enhanced[i] = (depth[i] + strength * detail).coerceIn(0f, 1f)
+        // depthSigma auto-scaled: use a fraction of the actual depth range
+        // This preserves edge detection accuracy regardless of the raw value range
+        val depthSigma = 0.04f
+
+        val smoothed = bilateralFilter(normalizedRaw, width, height, spatialSigma, depthSigma)
+
+        // Extract detail from the raw (normalized) depth and apply to processed depth
+        val enhanced = FloatArray(processedDepth.size)
+        for (i in processedDepth.indices) {
+            val detail = normalizedRaw[i] - smoothed[i]
+            enhanced[i] = (processedDepth[i] + strength * detail).coerceIn(0f, 1f)
         }
 
         return enhanced

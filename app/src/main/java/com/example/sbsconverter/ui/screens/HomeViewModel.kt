@@ -238,7 +238,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
                 val enhanced = if (config.surfaceDetail > 0f) {
                     depthEnhancer.bilateralUnsharpMask(
-                        depth = remapped, width = depthSize, height = depthSize,
+                        rawDepth = rawDepth, processedDepth = remapped,
+                        width = depthSize, height = depthSize,
                         strength = config.surfaceDetail
                     )
                 } else remapped

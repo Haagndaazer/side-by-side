@@ -18,15 +18,16 @@ class ImageProcessor {
         config: ProcessingConfig
     ): SbsResult = withContext(Dispatchers.Default) {
         val depthSize = DepthEstimator.MODEL_INPUT_SIZE
-        // Pipeline: normalize → histogram equalize → gamma remap → [enhance] → blur → warp
+        // Pipeline: normalize → histogram equalize → gamma remap → [enhance with raw detail] → blur → warp
         val normalized = BitmapUtils.normalizeDepthMap(rawDepthMap)
         val equalized = BitmapUtils.equalizeDepthHistogram(normalized)
         val remapped = BitmapUtils.remapDepthGamma(equalized, config.depthGamma)
 
-        // Bilateral unsharp mask — amplify surface micro-detail before blur
+        // Bilateral unsharp mask — extract micro-detail from RAW depth, apply to processed
         val enhanced = if (config.surfaceDetail > 0f) {
             depthEnhancer.bilateralUnsharpMask(
-                depth = remapped,
+                rawDepth = rawDepthMap,
+                processedDepth = remapped,
                 width = depthSize,
                 height = depthSize,
                 strength = config.surfaceDetail
