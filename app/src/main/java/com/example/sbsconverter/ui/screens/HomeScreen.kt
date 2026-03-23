@@ -76,6 +76,7 @@ import kotlinx.coroutines.delay
 fun HomeScreen(viewModel: HomeViewModel, onNavigateToBatch: () -> Unit = {}) {
     val isModelReady by viewModel.isModelReady.collectAsState()
     val modelLoadProgress by viewModel.modelLoadProgress.collectAsState()
+    val modelStatusText by viewModel.modelStatusText.collectAsState()
     val originalImage by viewModel.originalImage.collectAsState()
     val depthImage by viewModel.depthImage.collectAsState()
     val isEstimatingDepth by viewModel.isEstimatingDepth.collectAsState()
@@ -175,6 +176,7 @@ fun HomeScreen(viewModel: HomeViewModel, onNavigateToBatch: () -> Unit = {}) {
                 ImagePreviewArea(
                     isModelReady = isModelReady,
                     modelLoadProgress = modelLoadProgress,
+                    modelStatusText = modelStatusText,
                     originalImage = originalImage,
                     depthImage = depthImage,
                     isEstimatingDepth = isEstimatingDepth,
@@ -226,6 +228,7 @@ fun HomeScreen(viewModel: HomeViewModel, onNavigateToBatch: () -> Unit = {}) {
 private fun ImagePreviewArea(
     isModelReady: Boolean,
     modelLoadProgress: Float,
+    modelStatusText: String,
     originalImage: ImageBitmap?,
     depthImage: ImageBitmap?,
     isEstimatingDepth: Boolean,
@@ -245,7 +248,7 @@ private fun ImagePreviewArea(
     arrangement: SbsArrangement
 ) {
     if (!isModelReady) {
-        ModelLoadingIndicator(modelLoadProgress, errorMessage)
+        ModelLoadingIndicator(modelLoadProgress, errorMessage, modelStatusText)
         return
     }
 
@@ -443,7 +446,7 @@ private fun ImagePreviewArea(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun ModelLoadingIndicator(progress: Float, errorMessage: String?) {
+private fun ModelLoadingIndicator(progress: Float, errorMessage: String?, statusText: String = "Preparing model...") {
     TooltipBox(
         positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
         tooltip = { PlainTooltip { Text("Loading model") } },
@@ -457,7 +460,7 @@ private fun ModelLoadingIndicator(progress: Float, errorMessage: String?) {
             Spacer(modifier = Modifier.height(16.dp))
             Text(
                 text = if (errorMessage != null) errorMessage
-                else "Preparing model... ${(progress * 100).toInt()}%",
+                else "$statusText ${(progress * 100).toInt()}%",
                 style = MaterialTheme.typography.bodyLarge
             )
             if (errorMessage == null) {

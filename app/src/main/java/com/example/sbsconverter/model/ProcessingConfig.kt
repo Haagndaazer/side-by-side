@@ -1,7 +1,7 @@
 package com.example.sbsconverter.model
 
 data class ProcessingConfig(
-    val depthScale: Float = 2f,
+    val depthScale: Float = 1f,
     val depthBlurKernel: Int = 3,
     val depthGamma: Float = 1f,
     val convergencePoint: Float = 1f,

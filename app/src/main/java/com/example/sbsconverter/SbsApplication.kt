@@ -30,23 +30,31 @@ class SbsApplication : Application() {
     private val _modelLoadProgress = MutableStateFlow(0f)
     val modelLoadProgress: StateFlow<Float> = _modelLoadProgress
 
+    private val _modelStatusText = MutableStateFlow("Preparing model...")
+    val modelStatusText: StateFlow<String> = _modelStatusText
+
     override fun onCreate() {
         super.onCreate()
         modelManager = ModelManager(this)
 
         appScope.launch {
             try {
+                _modelStatusText.value = "Copying model..."
                 modelManager.ensureModelReady { progress ->
-                    _modelLoadProgress.value = progress
+                    _modelLoadProgress.value = progress * 0.5f // first 50% is file copy
                 }
+                _modelLoadProgress.value = 0.5f
+                _modelStatusText.value = "Optimizing model..."
                 val estimator = DepthEstimator(modelManager.getModelPath())
                 withContext(Dispatchers.Default) {
                     estimator.initialize()
                 }
+                _modelLoadProgress.value = 1f
                 depthEstimator = estimator
                 _isModelReady.value = true
             } catch (e: Exception) {
-                // Model load failure is observed by ViewModels via isModelReady staying false
+                android.util.Log.e("SbsApp", "Model load failed", e)
+                _modelStatusText.value = "Failed to load model: ${e.message}"
             }
         }
     }

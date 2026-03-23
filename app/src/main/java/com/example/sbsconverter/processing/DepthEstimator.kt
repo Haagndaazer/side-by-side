@@ -22,10 +22,11 @@ class DepthEstimator(private val modelPath: String) : Closeable {
         val env = OrtEnvironment.getEnvironment()
         ortEnvironment = env
 
+        val numCores = Runtime.getRuntime().availableProcessors()
         val options = OrtSession.SessionOptions().apply {
-            setIntraOpNumThreads(
-                minOf(4, Runtime.getRuntime().availableProcessors())
-            )
+            // Use performance cores (Tensor G5: 1 X4 + 5 A725 + 2 A520)
+            setIntraOpNumThreads(minOf(6, numCores))
+            // BASIC_OPT for runtime; heavy optimizations are pre-baked into the model file
             setOptimizationLevel(OrtSession.SessionOptions.OptLevel.BASIC_OPT)
         }
 

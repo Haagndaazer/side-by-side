@@ -48,6 +48,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     val isModelReady: StateFlow<Boolean> = app.isModelReady
     val modelLoadProgress: StateFlow<Float> = app.modelLoadProgress
+    val modelStatusText: StateFlow<String> = app.modelStatusText
 
     private val _originalImage = MutableStateFlow<ImageBitmap?>(null)
     val originalImage: StateFlow<ImageBitmap?> = _originalImage
