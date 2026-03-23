@@ -18,16 +18,7 @@ class DepthEnhancer {
         depthSigma: Float = 0.04f,
         strength: Float = 1.2f
     ): FloatArray {
-        // Half-resolution optimization: downsample → bilateral → upsample.
-        // The bilateral produces a smooth version — fine detail lost by downsampling
-        // doesn't matter since we subtract it from the full-res original anyway.
-        val halfW = width / 2
-        val halfH = height / 2
-        val halfSigma = spatialSigma / 2f
-
-        val halfDepth = downsample(depth, width, height, halfW, halfH)
-        val halfSmoothed = bilateralFilter(halfDepth, halfW, halfH, halfSigma, depthSigma)
-        val smoothed = upsample(halfSmoothed, halfW, halfH, width, height)
+        val smoothed = bilateralFilter(depth, width, height, spatialSigma, depthSigma)
 
         val enhanced = FloatArray(depth.size)
         for (i in depth.indices) {
@@ -36,44 +27,6 @@ class DepthEnhancer {
         }
 
         return enhanced
-    }
-
-    private fun downsample(src: FloatArray, srcW: Int, srcH: Int, dstW: Int, dstH: Int): FloatArray {
-        val dst = FloatArray(dstW * dstH)
-        for (y in 0 until dstH) {
-            for (x in 0 until dstW) {
-                val sx = x * 2
-                val sy = y * 2
-                // Average 2x2 block
-                var sum = src[sy * srcW + sx]
-                var count = 1
-                if (sx + 1 < srcW) { sum += src[sy * srcW + sx + 1]; count++ }
-                if (sy + 1 < srcH) { sum += src[(sy + 1) * srcW + sx]; count++ }
-                if (sx + 1 < srcW && sy + 1 < srcH) { sum += src[(sy + 1) * srcW + sx + 1]; count++ }
-                dst[y * dstW + x] = sum / count
-            }
-        }
-        return dst
-    }
-
-    private fun upsample(src: FloatArray, srcW: Int, srcH: Int, dstW: Int, dstH: Int): FloatArray {
-        val dst = FloatArray(dstW * dstH)
-        for (y in 0 until dstH) {
-            for (x in 0 until dstW) {
-                val fx = x.toFloat() / dstW * srcW
-                val fy = y.toFloat() / dstH * srcH
-                val x0 = fx.toInt().coerceIn(0, srcW - 2)
-                val y0 = fy.toInt().coerceIn(0, srcH - 2)
-                val dx = fx - x0
-                val dy = fy - y0
-                dst[y * dstW + x] =
-                    src[y0 * srcW + x0] * (1 - dx) * (1 - dy) +
-                    src[y0 * srcW + x0 + 1] * dx * (1 - dy) +
-                    src[(y0 + 1) * srcW + x0] * (1 - dx) * dy +
-                    src[(y0 + 1) * srcW + x0 + 1] * dx * dy
-            }
-        }
-        return dst
     }
 
     /**

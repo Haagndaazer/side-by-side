@@ -235,14 +235,15 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 val normalized = BitmapUtils.normalizeDepthMap(rawDepth)
                 val equalized = BitmapUtils.equalizeDepthHistogram(normalized)
                 val remapped = BitmapUtils.remapDepthGamma(equalized, config.depthGamma)
-                val blurred = BitmapUtils.blurDepthMap(remapped, depthSize, depthSize, config.depthBlurKernel)
 
                 val enhanced = if (config.surfaceDetail > 0f) {
                     depthEnhancer.bilateralUnsharpMask(
-                        depth = blurred, width = depthSize, height = depthSize,
+                        depth = remapped, width = depthSize, height = depthSize,
                         strength = config.surfaceDetail
                     )
-                } else blurred
+                } else remapped
+
+                val blurred = BitmapUtils.blurDepthMap(enhanced, depthSize, depthSize, config.depthBlurKernel)
 
                 BitmapUtils.depthToGrayscaleBitmap(enhanced, bitmap.width, bitmap.height)
             }

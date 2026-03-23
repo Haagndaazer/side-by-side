@@ -8,8 +8,8 @@ import java.io.File
 class ModelManager(private val context: Context) {
 
     companion object {
-        const val MODEL_FILENAME = "depth_anything_v2_vitb_756.onnx"
-        private const val ASSET_NAME = "depth_anything_v2_vitb_756.onnx"
+        const val MODEL_FILENAME = "depth_anything_v2_vitb_770.onnx"
+        private const val ASSET_NAME = "depth_anything_v2_vitb_770.onnx"
         private const val COPY_BUFFER_SIZE = 65536
     }
 

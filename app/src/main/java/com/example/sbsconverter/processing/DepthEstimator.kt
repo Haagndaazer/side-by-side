@@ -9,7 +9,7 @@ import java.nio.FloatBuffer
 class DepthEstimator(private val modelPath: String) : Closeable {
 
     companion object {
-        const val MODEL_INPUT_SIZE = 756
+        const val MODEL_INPUT_SIZE = 770
     }
 
     private var ortEnvironment: OrtEnvironment? = null
@@ -45,7 +45,7 @@ class DepthEstimator(private val modelPath: String) : Closeable {
         val outputTensor = results.get("depth")
             .orElseThrow { RuntimeException("No depth output from model") }
 
-        // Output shape is [1, 756, 756] — Java represents as Array<Array<FloatArray>>
+        // Output shape is [1, MODEL_INPUT_SIZE, MODEL_INPUT_SIZE] — Java represents as Array<Array<FloatArray>>
         @Suppress("UNCHECKED_CAST")
         val depthMap3d = outputTensor.value as Array<Array<FloatArray>>
         val depth2d = depthMap3d[0]

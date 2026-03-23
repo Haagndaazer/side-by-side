@@ -16,10 +16,10 @@ CACHE_DIR = os.path.join(SCRIPT_DIR, ".cache")
 
 DYNAMIC_MODEL_URL = "https://github.com/fabio-sim/Depth-Anything-ONNX/releases/download/v2.0.0/depth_anything_v2_vitb_dynamic.onnx"
 DYNAMIC_MODEL_FILE = os.path.join(CACHE_DIR, "depth_anything_v2_vitb_dynamic.onnx")
-FIXED_MODEL_FILE = os.path.join(CACHE_DIR, "depth_anything_v2_vitb_518.onnx")
-OUTPUT_MODEL_FILE = os.path.join(ASSETS_DIR, "depth_anything_v2_vitb_518.onnx")
+FIXED_MODEL_FILE = os.path.join(CACHE_DIR, "depth_anything_v2_vitb_770.onnx")
+OUTPUT_MODEL_FILE = os.path.join(ASSETS_DIR, "depth_anything_v2_vitb_770.onnx")
 
-INPUT_SIZE = 518
+INPUT_SIZE = 770
 
 
 def download_model():
