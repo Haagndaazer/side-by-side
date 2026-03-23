@@ -91,7 +91,7 @@ object BitmapUtils {
      */
     private const val MAX_IMAGE_DIMENSION = 2048
 
-    fun loadBitmapFromUri(context: Context, uri: Uri): Bitmap? {
+    fun loadBitmapFromUri(context: Context, uri: Uri, maxDimension: Int = MAX_IMAGE_DIMENSION): Bitmap? {
         // First pass: decode bounds only to calculate sample size
         val boundsOptions = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         context.contentResolver.openInputStream(uri)?.use {
@@ -103,8 +103,8 @@ object BitmapUtils {
 
         // Calculate power-of-2 sample size for efficient decode
         var sampleSize = 1
-        while (rawWidth / (sampleSize * 2) >= MAX_IMAGE_DIMENSION ||
-            rawHeight / (sampleSize * 2) >= MAX_IMAGE_DIMENSION
+        while (rawWidth / (sampleSize * 2) >= maxDimension ||
+            rawHeight / (sampleSize * 2) >= maxDimension
         ) {
             sampleSize *= 2
         }
@@ -116,8 +116,8 @@ object BitmapUtils {
         } ?: return null
 
         // Fine-scale if still exceeds max (inSampleSize is coarse, power-of-2 only)
-        val bitmap = if (decoded.width > MAX_IMAGE_DIMENSION || decoded.height > MAX_IMAGE_DIMENSION) {
-            val scale = MAX_IMAGE_DIMENSION.toFloat() / maxOf(decoded.width, decoded.height)
+        val bitmap = if (decoded.width > maxDimension || decoded.height > maxDimension) {
+            val scale = maxDimension.toFloat() / maxOf(decoded.width, decoded.height)
             val newW = (decoded.width * scale).toInt()
             val newH = (decoded.height * scale).toInt()
             val scaled = Bitmap.createScaledBitmap(decoded, newW, newH, true)

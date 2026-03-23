@@ -6,6 +6,7 @@ import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -68,7 +69,8 @@ import kotlinx.coroutines.withContext
 @Composable
 fun BatchScreen(
     viewModel: BatchViewModel,
-    onNavigateBack: () -> Unit
+    onNavigateBack: () -> Unit,
+    onNavigateToViewer: (android.net.Uri) -> Unit = {}
 ) {
     val batchMode by viewModel.batchMode.collectAsState()
     val items by viewModel.items.collectAsState()
@@ -248,7 +250,8 @@ fun BatchScreen(
                                 BatchItemRow(
                                     item = item,
                                     onRemove = { viewModel.removeItem(item.id) },
-                                    canRemove = !isProcessing && item.status == BatchItemStatus.PENDING
+                                    canRemove = !isProcessing && item.status == BatchItemStatus.PENDING,
+                                    onViewResult = item.resultUri?.let { uri -> { onNavigateToViewer(uri) } }
                                 )
                             }
                         }
@@ -257,7 +260,8 @@ fun BatchScreen(
                                 BatchPairItemRow(
                                     pair = pair,
                                     onRemove = { viewModel.removePairItem(pair.id) },
-                                    canRemove = !isProcessing && pair.status == BatchItemStatus.PENDING
+                                    canRemove = !isProcessing && pair.status == BatchItemStatus.PENDING,
+                                    onViewResult = pair.resultUri?.let { uri -> { onNavigateToViewer(uri) } }
                                 )
                             }
                         }
@@ -351,7 +355,8 @@ fun BatchScreen(
 private fun BatchItemRow(
     item: BatchItem,
     onRemove: () -> Unit,
-    canRemove: Boolean
+    canRemove: Boolean,
+    onViewResult: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     var thumbnail by remember(item.uri) { mutableStateOf<ImageBitmap?>(null) }
@@ -389,7 +394,7 @@ private fun BatchItemRow(
 
             // SBS result preview
             if (item.status == BatchItemStatus.DONE && item.resultUri != null) {
-                ResultPreview(item.resultUri, item.displayName)
+                ResultPreview(item.resultUri, item.displayName, onTap = onViewResult)
             }
         }
     }
@@ -400,7 +405,8 @@ private fun BatchItemRow(
 private fun BatchPairItemRow(
     pair: BatchPairItem,
     onRemove: () -> Unit,
-    canRemove: Boolean
+    canRemove: Boolean,
+    onViewResult: (() -> Unit)? = null
 ) {
     val context = LocalContext.current
     var leftThumb by remember(pair.leftUri) { mutableStateOf<ImageBitmap?>(null) }
@@ -461,7 +467,7 @@ private fun BatchPairItemRow(
 
             // SBS result preview
             if (pair.status == BatchItemStatus.DONE && pair.resultUri != null) {
-                ResultPreview(pair.resultUri, pair.leftDisplayName)
+                ResultPreview(pair.resultUri, pair.leftDisplayName, onTap = onViewResult)
             }
         }
     }
@@ -523,12 +529,12 @@ private fun StatusIcon(
 }
 
 @Composable
-private fun ResultPreview(resultUri: android.net.Uri, displayName: String) {
+private fun ResultPreview(resultUri: android.net.Uri, displayName: String, onTap: (() -> Unit)? = null) {
     val context = LocalContext.current
     var resultImage by remember(resultUri) { mutableStateOf<ImageBitmap?>(null) }
     LaunchedEffect(resultUri) {
         val bmp = withContext(Dispatchers.IO) {
-            BitmapUtils.loadThumbnail(context, resultUri, 1024)
+            BitmapUtils.loadBitmapFromUri(context, resultUri)
         }
         if (bmp != null) resultImage = bmp.asImageBitmap()
     }
@@ -540,6 +546,7 @@ private fun ResultPreview(resultUri: android.net.Uri, displayName: String) {
             modifier = Modifier
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(bottomStart = 12.dp, bottomEnd = 12.dp))
+                .then(if (onTap != null) Modifier.clickable { onTap() } else Modifier)
         )
     }
 }

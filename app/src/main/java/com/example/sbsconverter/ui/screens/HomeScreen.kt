@@ -67,13 +67,18 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import com.example.sbsconverter.ui.components.StereoViewer
 import com.example.sbsconverter.model.Arrangement as SbsArrangement
 import com.example.sbsconverter.model.ProcessingConfig
 import kotlinx.coroutines.delay
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun HomeScreen(viewModel: HomeViewModel, onNavigateToBatch: () -> Unit = {}) {
+fun HomeScreen(
+    viewModel: HomeViewModel,
+    onNavigateToBatch: () -> Unit = {},
+    onNavigateToViewer: (android.net.Uri?) -> Unit = {}
+) {
     val isModelReady by viewModel.isModelReady.collectAsState()
     val modelLoadProgress by viewModel.modelLoadProgress.collectAsState()
     val modelStatusText by viewModel.modelStatusText.collectAsState()
@@ -208,6 +213,7 @@ fun HomeScreen(viewModel: HomeViewModel, onNavigateToBatch: () -> Unit = {}) {
                 },
                 onSave = { viewModel.saveSbsToGallery() },
                 onBatch = onNavigateToBatch,
+                onViewStereo = { onNavigateToViewer(null) },
                 onSliderFinished = { viewModel.onSliderFinished() },
                 isModelReady = isModelReady,
                 hasDepth = depthImage != null,
@@ -277,33 +283,17 @@ private fun ImagePreviewArea(
         val effectiveMode = if ((isAdjustingConvergence || isAdjustingSurfaceDetail) && depthImage != null) null else viewMode
         when {
             hasSbsResult && effectiveMode == ViewMode.SBS_RESULT && sbsImage != null -> {
-                // SBS result view
-                TooltipBox(
-                    positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
-                    tooltip = { PlainTooltip { Text("Side-by-side 3D result") } },
-                    state = rememberTooltipState()
-                ) {
-                    Column(
-                        modifier = Modifier.semantics { contentDescription = "SBS 3D result" },
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Image(
-                            bitmap = sbsImage,
-                            contentDescription = "Side-by-side 3D result",
-                            contentScale = ContentScale.Fit,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .aspectRatio(sbsImage.width.toFloat() / sbsImage.height.toFloat(), matchHeightConstraintsFirst = true)
-                                .clip(RoundedCornerShape(8.dp))
+                // Interactive stereo 3D viewer with zoom/pan
+                StereoViewer(
+                    sbsImage = sbsImage,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .aspectRatio(
+                            (sbsImage.width.toFloat() / 2f) / sbsImage.height.toFloat(),
+                            matchHeightConstraintsFirst = true
                         )
-                        Spacer(modifier = Modifier.height(4.dp))
-                        Text(
-                            text = if (arrangement == SbsArrangement.PARALLEL) "Parallel (wall-eyed)" else "Cross-eye",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                        )
-                    }
-                }
+                        .clip(RoundedCornerShape(8.dp))
+                )
             }
             hasSbsResult && effectiveMode == ViewMode.WIGGLEGRAM && sbsImage != null -> {
                 WigglegramPreview(
@@ -638,6 +628,7 @@ private fun BottomControlPanel(
     onLoadImage: () -> Unit,
     onSave: () -> Unit,
     onBatch: () -> Unit,
+    onViewStereo: () -> Unit,
     onSliderFinished: () -> Unit,
     isModelReady: Boolean,
     hasDepth: Boolean,
@@ -880,6 +871,20 @@ private fun BottomControlPanel(
                             .weight(0.7f)
                             .semantics { contentDescription = "Batch convert button" }
                     ) { Text("Batch") }
+                }
+
+                TooltipBox(
+                    positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+                    tooltip = { PlainTooltip { Text("Open full-screen 3D viewer") } },
+                    state = rememberTooltipState()
+                ) {
+                    Button(
+                        onClick = onViewStereo,
+                        enabled = isModelReady && !isAnyProcessing,
+                        modifier = Modifier
+                            .weight(0.7f)
+                            .semantics { contentDescription = "View 3D button" }
+                    ) { Text("View") }
                 }
 
                 TooltipBox(

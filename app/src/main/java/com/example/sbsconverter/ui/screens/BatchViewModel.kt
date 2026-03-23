@@ -239,7 +239,7 @@ class BatchViewModel(application: Application) : AndroidViewModel(application) {
                     }
 
                     // Combine into SBS — parallel format (left eye left, right eye right)
-                    val sbsBitmap = combinePairSbs(alignResult.transformedLeft, alignResult.transformedRight, Arrangement.PARALLEL)
+                    val sbsBitmap = combinePairSbs(alignResult.transformedLeft, alignResult.transformedRight, Arrangement.CROSS_EYED)
 
                     // Cleanup intermediates
                     alignResult.transformedLeft.recycle()
