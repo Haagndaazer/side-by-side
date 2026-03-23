@@ -1,8 +1,8 @@
 """
-Download Depth Anything V2 Base dynamic ONNX model, bake to fixed 770x770,
-optimize transformer graph, convert to FP16, and prepare for Android deployment.
+Download Depth Anything V2 Base dynamic ONNX model, bake to fixed 1022x1022,
+optimize transformer graph, and prepare for Android deployment.
 
-Requirements: pip install onnxruntime onnx onnxconverter-common
+Requirements: pip install onnxruntime onnx
 """
 
 import os
@@ -15,12 +15,11 @@ CACHE_DIR = os.path.join(SCRIPT_DIR, ".cache")
 
 DYNAMIC_MODEL_URL = "https://github.com/fabio-sim/Depth-Anything-ONNX/releases/download/v2.0.0/depth_anything_v2_vitb_dynamic.onnx"
 DYNAMIC_MODEL_FILE = os.path.join(CACHE_DIR, "depth_anything_v2_vitb_dynamic.onnx")
-FIXED_MODEL_FILE = os.path.join(CACHE_DIR, "depth_anything_v2_vitb_770_fixed.onnx")
-OPTIMIZED_MODEL_FILE = os.path.join(CACHE_DIR, "depth_anything_v2_vitb_770_opt.onnx")
-FP16_MODEL_FILE = os.path.join(CACHE_DIR, "depth_anything_v2_vitb_770_fp16.onnx")
-OUTPUT_MODEL_FILE = os.path.join(ASSETS_DIR, "depth_anything_v2_vitb_770_fp16.onnx")
+FIXED_MODEL_FILE = os.path.join(CACHE_DIR, "depth_anything_v2_vitb_1022_fixed.onnx")
+OPTIMIZED_MODEL_FILE = os.path.join(CACHE_DIR, "depth_anything_v2_vitb_1022.onnx")
+OUTPUT_MODEL_FILE = os.path.join(ASSETS_DIR, "depth_anything_v2_vitb_1022.onnx")
 
-INPUT_SIZE = 770
+INPUT_SIZE = 1022
 
 
 def download_model():
@@ -84,37 +83,19 @@ def optimize_model():
         shutil.copy2(FIXED_MODEL_FILE, OPTIMIZED_MODEL_FILE)
 
 
-def convert_fp16():
-    if os.path.exists(FP16_MODEL_FILE):
-        size_mb = os.path.getsize(FP16_MODEL_FILE) / (1024 * 1024)
-        print(f"FP16 model already cached ({size_mb:.0f}MB)")
-        return
-
-    print("Converting to FP16 (halving model size)...")
-    import onnx
-    from onnxconverter_common import float16
-
-    model = onnx.load(OPTIMIZED_MODEL_FILE)
-    model_fp16 = float16.convert_float_to_float16(model, keep_io_types=True)
-    onnx.save(model_fp16, FP16_MODEL_FILE)
-    size_mb = os.path.getsize(FP16_MODEL_FILE) / (1024 * 1024)
-    print(f"FP16 model saved ({size_mb:.0f}MB)")
-
-
 def copy_to_assets():
     os.makedirs(ASSETS_DIR, exist_ok=True)
     import shutil
-    shutil.copy2(FP16_MODEL_FILE, OUTPUT_MODEL_FILE)
+    shutil.copy2(OPTIMIZED_MODEL_FILE, OUTPUT_MODEL_FILE)
     size_mb = os.path.getsize(OUTPUT_MODEL_FILE) / (1024 * 1024)
-    print(f"Model copied to assets ({size_mb:.0f}MB)")
+    print(f"FP32 model copied to assets ({size_mb:.0f}MB)")
 
 
 def main():
-    print(f"=== Preparing Depth Anything V2 Base {INPUT_SIZE}x{INPUT_SIZE} FP16 model ===")
+    print(f"=== Preparing Depth Anything V2 Base {INPUT_SIZE}x{INPUT_SIZE} FP32 model ===")
     download_model()
     bake_fixed_shape()
     optimize_model()
-    convert_fp16()
     copy_to_assets()
     print("=== Done ===")
 

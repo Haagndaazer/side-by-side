@@ -115,7 +115,7 @@ class GpuStereoWarper : Closeable {
 
         val w = sourceBitmap.width
         val h = sourceBitmap.height
-        val depthSize = 770 // DepthEstimator.MODEL_INPUT_SIZE
+        val depthSize = DepthEstimator.MODEL_INPUT_SIZE
 
         val s = shader!!
         s.setFloatUniform("imageSize", w.toFloat(), h.toFloat())

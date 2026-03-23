@@ -332,8 +332,8 @@ private fun ImagePreviewArea(
             ConvergenceOverlay(
                 normalizedDepth = normalizedDepth,
                 convergencePoint = convergencePoint,
-                depthWidth = 770,
-                depthHeight = 770,
+                depthWidth = 1022,
+                depthHeight = 1022,
                 modifier = Modifier
                     .fillMaxWidth()
                     .aspectRatio(imageAspect, matchHeightConstraintsFirst = true)

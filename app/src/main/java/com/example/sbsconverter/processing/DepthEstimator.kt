@@ -9,7 +9,7 @@ import java.nio.FloatBuffer
 class DepthEstimator(private val modelPath: String) : Closeable {
 
     companion object {
-        const val MODEL_INPUT_SIZE = 770
+        const val MODEL_INPUT_SIZE = 1022
     }
 
     private var ortEnvironment: OrtEnvironment? = null

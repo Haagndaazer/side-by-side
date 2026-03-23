@@ -12,7 +12,7 @@ import java.io.Closeable
 class SbsWarper : Closeable {
 
     companion object {
-        private const val DEPTH_SIZE = 770
+        private const val DEPTH_SIZE = 1022
         private const val MAX_MESH_DIM = 256
         private const val MESH_DIVISOR = 8
         private const val EDGE_FADE_PERCENT = 0.02f
