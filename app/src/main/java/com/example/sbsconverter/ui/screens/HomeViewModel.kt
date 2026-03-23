@@ -283,8 +283,6 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
                 _hasSbsResult.value = true
                 depthDirty = false
                 _sbsImage.value = result.sbsBitmap.asImageBitmap()
-                _meshVerts.value = result.meshVerts
-                _meshDimensions.value = Pair(result.meshW, result.meshH)
 
                 if (_viewMode.value == ViewMode.DEPTH_COMPARE) {
                     _viewMode.value = ViewMode.SBS_RESULT
