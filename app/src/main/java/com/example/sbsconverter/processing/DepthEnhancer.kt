@@ -51,9 +51,14 @@ class DepthEnhancer : Closeable {
             FloatArray(rawDepth.size) { ((rawDepth[it] - rawMin) / rawRange).coerceIn(0f, 1f) }
         } else rawDepth
 
-        // depthSigma auto-scaled: use a fraction of the actual depth range
-        // This preserves edge detection accuracy regardless of the raw value range
-        val depthSigma = 0.04f
+        // Adaptive depthSigma based on depth distribution spread
+        // Long-distance scenes (low stddev): smaller sigma → finer sensitivity to subtle detail
+        // Close-up scenes (high stddev): larger sigma → cleaner edge preservation
+        var varSum = 0.0
+        val mean = normalizedRaw.average().toFloat()
+        for (v in normalizedRaw) { val d = v - mean; varSum += d * d }
+        val stddev = kotlin.math.sqrt(varSum / normalizedRaw.size).toFloat()
+        val depthSigma = (0.02f + 0.04f * stddev).coerceIn(0.01f, 0.08f)
 
         val smoothed = bilateralFilter(normalizedRaw, width, height, spatialSigma, depthSigma)
 

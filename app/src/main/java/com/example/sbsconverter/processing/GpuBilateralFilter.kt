@@ -126,7 +126,10 @@ class GpuBilateralFilter(
     ): FloatArray {
         if (!gpuAvailable) throw IllegalStateException("GPU not available")
 
+        val t0 = System.currentTimeMillis()
         val inputBitmap = floatArrayToBitmap(depth)
+        val t1 = System.currentTimeMillis()
+        Log.d(TAG, "F16 encode: ${t1-t0}ms")
 
         // Pass 1: Horizontal
         val hShader = horizontalShader!!
@@ -137,6 +140,8 @@ class GpuBilateralFilter(
             BitmapShader(inputBitmap, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP))
 
         val intermediate = renderShader(hShader)
+        val t2 = System.currentTimeMillis()
+        Log.d(TAG, "GPU horizontal: ${t2-t1}ms")
         inputBitmap.recycle()
 
         // Pass 2: Vertical
@@ -148,9 +153,13 @@ class GpuBilateralFilter(
             BitmapShader(intermediate, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP))
 
         val output = renderShader(vShader)
+        val t3 = System.currentTimeMillis()
+        Log.d(TAG, "GPU vertical: ${t3-t2}ms")
         intermediate.recycle()
 
         val result = bitmapToFloatArray(output)
+        val t4 = System.currentTimeMillis()
+        Log.d(TAG, "F16 decode: ${t4-t3}ms, total: ${t4-t0}ms")
         output.recycle()
 
         return result
@@ -184,7 +193,6 @@ class GpuBilateralFilter(
         val hwBuffer = image.hardwareBuffer!!
         val hwBitmap = Bitmap.wrapHardwareBuffer(hwBuffer, null)!!
 
-        // Copy to software bitmap so we can read pixels
         val softBitmap = hwBitmap.copy(Bitmap.Config.ARGB_8888, false)
 
         hwBitmap.recycle()
@@ -198,25 +206,29 @@ class GpuBilateralFilter(
     }
 
     /**
-     * Convert FloatArray depth values to an ARGB_8888 Bitmap.
-     * Depth is encoded in R, G, and B channels equally (grayscale).
-     * Using ARGB_8888 for broader compatibility — the bilateral filter's
-     * depthSigma (0.04) maps to ~10 8-bit levels which is adequate
-     * for the range kernel discrimination.
+     * Convert FloatArray depth values to an RGBA_F16 Bitmap.
+     * Uses half-float encoding for full precision — no 8-bit quantization loss.
      */
     private fun floatArrayToBitmap(depth: FloatArray): Bitmap {
-        val pixels = IntArray(depth.size)
+        val buffer = java.nio.ShortBuffer.allocate(depth.size * 4)
+        val oneHalf = Half.toHalf(1f)
         for (i in depth.indices) {
-            val v = (depth[i].coerceIn(0f, 1f) * 255f).toInt()
-            pixels[i] = (0xFF shl 24) or (v shl 16) or (v shl 8) or v
+            val h = Half.toHalf(depth[i])
+            buffer.put(h)       // R
+            buffer.put(h)       // G
+            buffer.put(h)       // B
+            buffer.put(oneHalf) // A
         }
-        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        bitmap.setPixels(pixels, 0, width, 0, 0, width, height)
+        buffer.rewind()
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.RGBA_F16)
+        bitmap.copyPixelsFromBuffer(buffer)
         return bitmap
     }
 
     /**
      * Extract depth values from the R channel of an ARGB_8888 Bitmap back to FloatArray.
+     * Output is 8-bit precision — fine for the smoothed version since detail extraction
+     * happens on CPU against the full float32 original.
      */
     private fun bitmapToFloatArray(bitmap: Bitmap): FloatArray {
         val pixels = IntArray(width * height)
