@@ -1,9 +1,15 @@
 package com.example.sbsconverter.processing
 
+import android.os.Build
+import android.util.Log
+import java.io.Closeable
 import kotlin.math.abs
 import kotlin.math.exp
 
-class DepthEnhancer {
+class DepthEnhancer : Closeable {
+
+    private var gpuFilter: GpuBilateralFilter? = null
+    private var gpuInitialized = false
 
     /**
      * Bilateral Unsharp Mask — amplifies local depth variation while preserving edges.
@@ -33,8 +39,6 @@ class DepthEnhancer {
      * Compute gradient-based micro-parallax displacement.
      * Uses central difference for horizontal gradient, with edge mask
      * to suppress gradient at depth discontinuities.
-     *
-     * @return Per-pixel horizontal gradient scaled by microStrength
      */
     fun computeGradientMicroParallax(
         depth: FloatArray,
@@ -44,7 +48,6 @@ class DepthEnhancer {
     ): FloatArray {
         val microParallax = FloatArray(depth.size)
 
-        // First compute raw gradient
         for (y in 0 until height) {
             for (x in 0 until width) {
                 val idx = y * width + x
@@ -77,12 +80,49 @@ class DepthEnhancer {
     }
 
     /**
-     * Separable bilateral filter — edge-preserving smoothing.
-     * Applies 1D bilateral horizontally then vertically.
-     * Not mathematically identical to true 2D bilateral but very close
-     * in practice and ~10x faster.
+     * Bilateral filter — dispatches to GPU (API 33+) or CPU fallback.
      */
     private fun bilateralFilter(
+        depth: FloatArray,
+        width: Int,
+        height: Int,
+        spatialSigma: Float,
+        depthSigma: Float
+    ): FloatArray {
+        // Try GPU path on API 33+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val gpu = getOrCreateGpuFilter(width, height)
+            if (gpu != null && gpu.gpuAvailable) {
+                return try {
+                    gpu.filter(depth, spatialSigma, depthSigma)
+                } catch (e: Exception) {
+                    Log.w("DepthEnhancer", "GPU bilateral failed, falling back to CPU: ${e.message}")
+                    bilateralFilterCpu(depth, width, height, spatialSigma, depthSigma)
+                }
+            }
+        }
+
+        return bilateralFilterCpu(depth, width, height, spatialSigma, depthSigma)
+    }
+
+    @androidx.annotation.RequiresApi(Build.VERSION_CODES.TIRAMISU)
+    private fun getOrCreateGpuFilter(width: Int, height: Int): GpuBilateralFilter? {
+        if (!gpuInitialized) {
+            gpuInitialized = true
+            gpuFilter = try {
+                GpuBilateralFilter(width, height)
+            } catch (e: Exception) {
+                Log.w("DepthEnhancer", "Failed to create GPU filter: ${e.message}")
+                null
+            }
+        }
+        return gpuFilter
+    }
+
+    /**
+     * CPU bilateral filter — separable approximation (horizontal + vertical).
+     */
+    private fun bilateralFilterCpu(
         depth: FloatArray,
         width: Int,
         height: Int,
@@ -93,7 +133,6 @@ class DepthEnhancer {
         val spatialDenom = 2.0f * spatialSigma * spatialSigma
         val depthDenom = 2.0f * depthSigma * depthSigma
 
-        // Precompute spatial weights
         val spatialWeights = FloatArray(radius + 1) { k ->
             exp(-(k * k).toFloat() / spatialDenom)
         }
@@ -149,5 +188,10 @@ class DepthEnhancer {
         }
 
         return result
+    }
+
+    override fun close() {
+        gpuFilter?.close()
+        gpuFilter = null
     }
 }
