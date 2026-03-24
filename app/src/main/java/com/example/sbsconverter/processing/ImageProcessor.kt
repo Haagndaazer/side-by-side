@@ -10,7 +10,6 @@ import kotlinx.coroutines.withContext
 class ImageProcessor {
 
     private val warper = SbsWarper()
-    private val depthEnhancer = DepthEnhancer()
 
     suspend fun processImage(
         sourceBitmap: Bitmap,
@@ -18,28 +17,23 @@ class ImageProcessor {
         config: ProcessingConfig
     ): SbsResult = withContext(Dispatchers.Default) {
         val depthSize = DepthEstimator.MODEL_INPUT_SIZE
-        // Pipeline: normalize → histogram equalize → gamma remap → [enhance with raw detail] → blur → warp
-        val normalized = BitmapUtils.normalizeDepthMap(rawDepthMap)
-        val equalized = BitmapUtils.equalizeDepthHistogram(normalized)
-        val remapped = BitmapUtils.remapDepthGamma(equalized, config.depthGamma)
 
-        // Bilateral unsharp mask — extract micro-detail from RAW depth, apply to processed
-        val enhanced = if (config.surfaceDetail > 0f) {
-            depthEnhancer.bilateralUnsharpMask(
-                rawDepth = rawDepthMap,
-                processedDepth = remapped,
-                width = depthSize,
-                height = depthSize,
-                strength = config.surfaceDetail
-            )
-        } else {
-            remapped
+        // Compute raw depth range for scene-aware disparity scaling
+        var rawMin = Float.MAX_VALUE
+        var rawMax = Float.MIN_VALUE
+        for (v in rawDepthMap) {
+            if (v < rawMin) rawMin = v
+            if (v > rawMax) rawMax = v
         }
+        val rawRange = (rawMax - rawMin).coerceAtLeast(0.001f)
+
+        // Linear normalize preserves depth ratios (no equalization/gamma)
+        val normalized = BitmapUtils.normalizeDepthMap(rawDepthMap)
 
         val blurred = BitmapUtils.blurDepthMap(
-            enhanced, depthSize, depthSize, config.depthBlurKernel
+            normalized, depthSize, depthSize, config.depthBlurKernel
         )
 
-        warper.generateSbsPair(sourceBitmap, blurred, config)
+        warper.generateSbsPair(sourceBitmap, blurred, config, rawRange)
     }
 }

@@ -2,7 +2,6 @@ package com.example.sbsconverter.processing
 
 import android.graphics.Bitmap
 import android.graphics.BitmapShader
-import android.graphics.Canvas
 import android.graphics.HardwareRenderer
 import android.graphics.Paint
 import android.graphics.PixelFormat
@@ -12,10 +11,10 @@ import android.graphics.Shader
 import android.hardware.HardwareBuffer
 import android.media.ImageReader
 import android.os.Build
+import android.util.Half
 import android.util.Log
 import androidx.annotation.RequiresApi
 import java.io.Closeable
-import kotlin.math.abs
 
 @RequiresApi(Build.VERSION_CODES.TIRAMISU)
 class GpuStereoWarper : Closeable {
@@ -26,44 +25,32 @@ class GpuStereoWarper : Closeable {
         private const val WARP_SHADER = """
             uniform shader sourceImage;
             uniform shader depthMap;
-            uniform shader gradientMap;
             uniform float2 imageSize;
             uniform float2 depthSize;
             uniform float maxDisparity;
             uniform float convergencePoint;
             uniform float direction;
             uniform float fadeWidth;
-            uniform float hasGradient;
-            uniform float gradientScale;
 
             half4 main(float2 fragCoord) {
                 // Map output pixel to depth map coordinates
                 float2 normCoord = fragCoord / imageSize;
                 float2 depthCoord = normCoord * (depthSize - 1.0);
 
-                // Sample depth and compute base shift
+                // Sample depth (F16 precision) and compute base shift
                 float depth = float(depthMap.eval(depthCoord).r);
                 float adjustedDepth = depth - convergencePoint;
                 float baseShift = adjustedDepth * maxDisparity * direction;
 
-                // Gradient micro-parallax (if enabled)
-                float gradShift = 0.0;
-                if (hasGradient > 0.5) {
-                    float encodedGrad = float(gradientMap.eval(depthCoord).r);
-                    gradShift = (encodedGrad * 2.0 - 1.0) * gradientScale * direction;
-                }
-
                 // Edge fade on trailing side
                 float edgeFade;
                 if (direction < 0.0) {
-                    // Left eye shifts left -> right edge loses pixels
                     edgeFade = clamp((imageSize.x - fragCoord.x) / fadeWidth, 0.0, 1.0);
                 } else {
-                    // Right eye shifts right -> left edge loses pixels
                     edgeFade = clamp(fragCoord.x / fadeWidth, 0.0, 1.0);
                 }
 
-                float totalShift = (baseShift + gradShift) * edgeFade;
+                float totalShift = baseShift * edgeFade;
 
                 // Backward warp: sample source at shifted position
                 float2 srcCoord = float2(
@@ -93,11 +80,10 @@ class GpuStereoWarper : Closeable {
     /**
      * Warp a single eye view using the GPU shader.
      *
-     * @param sourceBitmap  The source photo
-     * @param depthMap      770x770 processed depth FloatArray (0-1)
-     * @param gradientMap   770x770 gradient FloatArray (signed), or null
-     * @param isLeftEye     true for left eye, false for right
-     * @param maxDisparity  Maximum pixel displacement
+     * @param sourceBitmap      The source photo
+     * @param depthMap          1022x1022 processed depth FloatArray (0-1, linearly normalized)
+     * @param isLeftEye         true for left eye, false for right
+     * @param maxDisparity      Maximum pixel displacement (scene-aware, includes rawRange)
      * @param convergencePoint  Depth value at screen plane
      * @param edgeFadePercent   Fraction of width for edge fade ramp
      * @return Warped eye bitmap at source dimensions
@@ -105,7 +91,6 @@ class GpuStereoWarper : Closeable {
     fun warpEye(
         sourceBitmap: Bitmap,
         depthMap: FloatArray,
-        gradientMap: FloatArray?,
         isLeftEye: Boolean,
         maxDisparity: Float,
         convergencePoint: Float,
@@ -129,36 +114,14 @@ class GpuStereoWarper : Closeable {
         s.setInputBuffer("sourceImage",
             BitmapShader(sourceBitmap, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP))
 
-        // Depth map (FloatArray -> grayscale bitmap)
-        val depthBitmap = floatArrayToGrayscaleBitmap(depthMap, depthSize, depthSize)
+        // Depth map — F16 encoding for ~2048 depth levels (vs 256 with 8-bit)
+        val depthBitmap = floatArrayToF16Bitmap(depthMap, depthSize, depthSize)
         s.setInputBuffer("depthMap",
             BitmapShader(depthBitmap, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP))
 
-        // Gradient map (optional, bias-encoded)
-        if (gradientMap != null) {
-            s.setFloatUniform("hasGradient", 1f)
-            val maxAbsGrad = gradientMap.maxOfOrNull { abs(it) } ?: 1f
-            val gradScale = if (maxAbsGrad > 0f) maxAbsGrad else 1f
-            s.setFloatUniform("gradientScale", gradScale)
-            val gradBitmap = encodedGradientToBitmap(gradientMap, depthSize, depthSize, gradScale)
-            s.setInputBuffer("gradientMap",
-                BitmapShader(gradBitmap, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP))
-
-            val result = renderShader(s, w, h)
-            depthBitmap.recycle()
-            gradBitmap.recycle()
-            return result
-        } else {
-            s.setFloatUniform("hasGradient", 0f)
-            s.setFloatUniform("gradientScale", 1f)
-            // Need a dummy gradient shader — use depth bitmap as placeholder
-            s.setInputBuffer("gradientMap",
-                BitmapShader(depthBitmap, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP))
-
-            val result = renderShader(s, w, h)
-            depthBitmap.recycle()
-            return result
-        }
+        val result = renderShader(s, w, h)
+        depthBitmap.recycle()
+        return result
     }
 
     private fun renderShader(shader: RuntimeShader, width: Int, height: Int): Bitmap {
@@ -200,34 +163,24 @@ class GpuStereoWarper : Closeable {
         return softBitmap
     }
 
-    private fun floatArrayToGrayscaleBitmap(data: FloatArray, width: Int, height: Int): Bitmap {
-        val pixels = IntArray(data.size)
-        for (i in data.indices) {
-            val v = (data[i].coerceIn(0f, 1f) * 255f).toInt()
-            pixels[i] = (0xFF shl 24) or (v shl 16) or (v shl 8) or v
-        }
-        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        bitmap.setPixels(pixels, 0, width, 0, 0, width, height)
-        return bitmap
-    }
-
     /**
-     * Encode signed gradient values into a grayscale bitmap with bias 0.5.
-     * Encoded = (gradient / (2 * maxAbsGrad)) + 0.5, stored in all RGB channels.
-     * Shader decodes as: (sample * 2.0 - 1.0) * gradientScale
+     * Encode depth FloatArray as RGBA_F16 bitmap for full half-float precision.
+     * F16 gives ~2048 usable depth levels in [0,1] vs 256 with 8-bit grayscale.
+     * Proven pattern from GpuBilateralFilter — F16 input bitmaps work on Pixel 10.
      */
-    private fun encodedGradientToBitmap(
-        gradient: FloatArray, width: Int, height: Int, maxAbsGrad: Float
-    ): Bitmap {
-        val pixels = IntArray(gradient.size)
-        val scale = if (maxAbsGrad > 0f) 1f / (2f * maxAbsGrad) else 0f
-        for (i in gradient.indices) {
-            val encoded = (gradient[i] * scale + 0.5f).coerceIn(0f, 1f)
-            val v = (encoded * 255f).toInt()
-            pixels[i] = (0xFF shl 24) or (v shl 16) or (v shl 8) or v
+    private fun floatArrayToF16Bitmap(data: FloatArray, width: Int, height: Int): Bitmap {
+        val buffer = java.nio.ShortBuffer.allocate(data.size * 4)
+        val oneHalf = Half.toHalf(1f)
+        for (i in data.indices) {
+            val h = Half.toHalf(data[i].coerceIn(0f, 1f))
+            buffer.put(h)       // R
+            buffer.put(h)       // G
+            buffer.put(h)       // B
+            buffer.put(oneHalf) // A
         }
-        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        bitmap.setPixels(pixels, 0, width, 0, 0, width, height)
+        buffer.rewind()
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.RGBA_F16)
+        bitmap.copyPixelsFromBuffer(buffer)
         return bitmap
     }
 

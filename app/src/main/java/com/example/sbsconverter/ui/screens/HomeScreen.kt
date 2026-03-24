@@ -86,7 +86,6 @@ fun HomeScreen(
     val depthImage by viewModel.depthImage.collectAsState()
     val isEstimatingDepth by viewModel.isEstimatingDepth.collectAsState()
     val isGeneratingSbs by viewModel.isGeneratingSbs.collectAsState()
-    val isEnhancingDepth by viewModel.isEnhancingDepth.collectAsState()
     val errorMessage by viewModel.errorMessage.collectAsState()
     val inferenceTimeMs by viewModel.inferenceTimeMs.collectAsState()
     val processingConfig by viewModel.processingConfig.collectAsState()
@@ -101,7 +100,6 @@ fun HomeScreen(
 
     val snackbarHostState = remember { SnackbarHostState() }
     var isAdjustingConvergence by remember { mutableStateOf(false) }
-    var isAdjustingSurfaceDetail by remember { mutableStateOf(false) }
 
     val pickMedia = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
@@ -186,7 +184,6 @@ fun HomeScreen(
                     depthImage = depthImage,
                     isEstimatingDepth = isEstimatingDepth,
                     isGeneratingSbs = isGeneratingSbs,
-                    isEnhancingDepth = isEnhancingDepth,
                     errorMessage = errorMessage,
                     inferenceTimeMs = inferenceTimeMs,
                     sbsGenerationTimeMs = sbsGenerationTimeMs,
@@ -195,7 +192,6 @@ fun HomeScreen(
                     imageDimensions = imageDimensions,
                     hasSbsResult = hasSbsResult,
                     isAdjustingConvergence = isAdjustingConvergence,
-                    isAdjustingSurfaceDetail = isAdjustingSurfaceDetail,
                     normalizedDepth = normalizedDepth,
                     convergencePoint = processingConfig.convergencePoint,
                     arrangement = processingConfig.arrangement
@@ -221,9 +217,7 @@ fun HomeScreen(
                 isAnyProcessing = isAnyProcessing,
                 isSaving = isSaving,
                 errorMessage = errorMessage,
-                onConvergenceAdjusting = { isAdjustingConvergence = it },
-                onSurfaceDetailAdjusting = { isAdjustingSurfaceDetail = it },
-                onSurfaceDetailFinished = { viewModel.refreshEnhancedDepthPreview() }
+                onConvergenceAdjusting = { isAdjustingConvergence = it }
             )
         }
     }
@@ -239,7 +233,6 @@ private fun ImagePreviewArea(
     depthImage: ImageBitmap?,
     isEstimatingDepth: Boolean,
     isGeneratingSbs: Boolean,
-    isEnhancingDepth: Boolean,
     errorMessage: String?,
     inferenceTimeMs: Long?,
     sbsGenerationTimeMs: Long?,
@@ -248,7 +241,6 @@ private fun ImagePreviewArea(
     imageDimensions: Pair<Int, Int>?,
     hasSbsResult: Boolean,
     isAdjustingConvergence: Boolean,
-    isAdjustingSurfaceDetail: Boolean,
     normalizedDepth: FloatArray?,
     convergencePoint: Float,
     arrangement: SbsArrangement
@@ -280,7 +272,7 @@ private fun ImagePreviewArea(
 
     Box(contentAlignment = Alignment.Center) {
         // Main preview based on view mode (force depth compare while adjusting convergence or surface detail)
-        val effectiveMode = if ((isAdjustingConvergence || isAdjustingSurfaceDetail) && depthImage != null) null else viewMode
+        val effectiveMode = if (isAdjustingConvergence && depthImage != null) null else viewMode
         when {
             hasSbsResult && effectiveMode == ViewMode.SBS_RESULT && sbsImage != null -> {
                 // Interactive stereo 3D viewer with zoom/pan
@@ -377,23 +369,6 @@ private fun ImagePreviewArea(
             }
         }
 
-        // Processing overlay (enhancing depth)
-        if (isEnhancingDepth) {
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .aspectRatio(imageAspect, matchHeightConstraintsFirst = true)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(Color.Black.copy(alpha = 0.3f)),
-                contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    CircularProgressIndicator(color = Color.White)
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text("Enhancing depth...", style = MaterialTheme.typography.bodyMedium, color = Color.White)
-                }
-            }
-        }
 
         // Info badges (bottom-left)
         val infoText = buildString {
@@ -636,9 +611,7 @@ private fun BottomControlPanel(
     isAnyProcessing: Boolean,
     isSaving: Boolean,
     errorMessage: String?,
-    onConvergenceAdjusting: (Boolean) -> Unit,
-    onSurfaceDetailAdjusting: (Boolean) -> Unit,
-    onSurfaceDetailFinished: () -> Unit
+    onConvergenceAdjusting: (Boolean) -> Unit
 ) {
     Surface(
         tonalElevation = 3.dp,
@@ -677,12 +650,12 @@ private fun BottomControlPanel(
                 state = rememberTooltipState()
             ) {
                 Column(modifier = Modifier.semantics { contentDescription = "3D strength slider" }) {
-                    Text("3D Strength: ${"%.1f".format(config.depthScale)}%", style = MaterialTheme.typography.bodySmall)
+                    Text("3D Strength: ${"%.2f".format(config.depthScale)}", style = MaterialTheme.typography.bodySmall)
                     Slider(
                         value = config.depthScale,
                         onValueChange = { onConfigChange(config.copy(depthScale = it)) },
                         onValueChangeFinished = onSliderFinished,
-                        valueRange = 0.5f..8f,
+                        valueRange = 0.01f..1f,
                         enabled = isModelReady && hasDepth && !isAnyProcessing
                     )
                 }
@@ -772,24 +745,6 @@ private fun BottomControlPanel(
 
                     Spacer(modifier = Modifier.height(8.dp))
 
-                    // Depth Contrast slider
-                    TooltipBox(
-                        positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
-                        tooltip = { PlainTooltip { Text("Amplifies subtle depth differences for more 3D pop") } },
-                        state = rememberTooltipState()
-                    ) {
-                        Column(modifier = Modifier.semantics { contentDescription = "Depth contrast slider" }) {
-                            Text("Depth Contrast: ${"%.1f".format(config.depthGamma)}", style = MaterialTheme.typography.bodySmall)
-                            Slider(
-                                value = config.depthGamma,
-                                onValueChange = { onConfigChange(config.copy(depthGamma = it)) },
-                                onValueChangeFinished = onSliderFinished,
-                                valueRange = 0.2f..2f,
-                                enabled = isModelReady && hasDepth && !isAnyProcessing
-                            )
-                        }
-                    }
-
                     // Edge Smoothing slider
                     TooltipBox(
                         positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
@@ -807,30 +762,6 @@ private fun BottomControlPanel(
                                 onValueChangeFinished = onSliderFinished,
                                 valueRange = 1f..33f,
                                 steps = 15,
-                                enabled = isModelReady && hasDepth && !isAnyProcessing
-                            )
-                        }
-                    }
-
-                    // Surface Detail slider
-                    TooltipBox(
-                        positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
-                        tooltip = { PlainTooltip { Text("Enhances micro-depth surface detail like bumps, folds, and contours") } },
-                        state = rememberTooltipState()
-                    ) {
-                        Column(modifier = Modifier.semantics { contentDescription = "Surface detail slider" }) {
-                            Text("Surface Detail: ${"%.1f".format(config.surfaceDetail)}", style = MaterialTheme.typography.bodySmall)
-                            Slider(
-                                value = config.surfaceDetail,
-                                onValueChange = {
-                                    onSurfaceDetailAdjusting(true)
-                                    onConfigChange(config.copy(surfaceDetail = it))
-                                },
-                                onValueChangeFinished = {
-                                    onSurfaceDetailAdjusting(false)
-                                    onSurfaceDetailFinished()
-                                },
-                                valueRange = 0f..3f,
                                 enabled = isModelReady && hasDepth && !isAnyProcessing
                             )
                         }

@@ -18,24 +18,17 @@ class SbsWarper : Closeable {
         private const val EDGE_FADE_PERCENT = 0.02f
     }
 
-    private val depthEnhancer = DepthEnhancer()
     private var gpuWarper: GpuStereoWarper? = null
     private var gpuInitialized = false
 
     fun generateSbsPair(
         sourceBitmap: Bitmap,
-        normalizedDepth: FloatArray,
-        config: ProcessingConfig
+        processedDepth: FloatArray,
+        config: ProcessingConfig,
+        depthRange: Float = 1f
     ): SbsResult {
-        // Precompute gradient micro-parallax if surface detail is enabled
-        val gradientMap = if (config.surfaceDetail > 0f) {
-            val microStrength = config.surfaceDetail * 1.5f
-            depthEnhancer.computeGradientMicroParallax(
-                normalizedDepth, DEPTH_SIZE, DEPTH_SIZE, microStrength
-            )
-        } else null
-
-        val maxDisparity = config.depthScale / 100f * sourceBitmap.width / 2f
+        // Scene-aware disparity: deeper scenes (larger rawRange) get more parallax
+        val maxDisparity = config.depthScale / 100f * sourceBitmap.width / 2f * depthRange
 
         // Try GPU per-pixel warp (API 33+), fall back to CPU mesh warp
         val eyes = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -43,9 +36,9 @@ class SbsWarper : Closeable {
             if (gpu != null && gpu.gpuAvailable) {
                 try {
                     Pair(
-                        gpu.warpEye(sourceBitmap, normalizedDepth, gradientMap,
+                        gpu.warpEye(sourceBitmap, processedDepth,
                             isLeftEye = true, maxDisparity, config.convergencePoint, EDGE_FADE_PERCENT),
-                        gpu.warpEye(sourceBitmap, normalizedDepth, gradientMap,
+                        gpu.warpEye(sourceBitmap, processedDepth,
                             isLeftEye = false, maxDisparity, config.convergencePoint, EDGE_FADE_PERCENT)
                     )
                 } catch (e: Exception) {
@@ -56,8 +49,8 @@ class SbsWarper : Closeable {
         } else null
 
         val (leftEye, rightEye) = eyes ?: Pair(
-            warpEyeCpu(sourceBitmap, normalizedDepth, gradientMap, true, config, maxDisparity),
-            warpEyeCpu(sourceBitmap, normalizedDepth, gradientMap, false, config, maxDisparity)
+            warpEyeCpu(sourceBitmap, processedDepth, true, config, maxDisparity),
+            warpEyeCpu(sourceBitmap, processedDepth, false, config, maxDisparity)
         )
 
         val combined = combineViews(leftEye, rightEye, sourceBitmap.width, sourceBitmap.height, config)
@@ -85,7 +78,6 @@ class SbsWarper : Closeable {
     private fun warpEyeCpu(
         bitmap: Bitmap,
         depthMap: FloatArray,
-        gradientMap: FloatArray?,
         isLeftEye: Boolean,
         config: ProcessingConfig,
         maxDisparity: Float
@@ -114,17 +106,13 @@ class SbsWarper : Closeable {
                 val adjustedDepth = depth - config.convergencePoint
                 val baseShift = adjustedDepth * maxDisparity * direction
 
-                val gradShift = if (gradientMap != null) {
-                    bilinearSample(gradientMap, DEPTH_SIZE, DEPTH_SIZE, depthX, depthY) * direction
-                } else 0f
-
                 val edgeFade = if (isLeftEye) {
                     ((w - px) / fadeWidth).coerceIn(0f, 1f)
                 } else {
                     (px / fadeWidth).coerceIn(0f, 1f)
                 }
 
-                val totalShift = (baseShift + gradShift) * edgeFade
+                val totalShift = baseShift * edgeFade
                 verts[idx] = (px + totalShift).coerceIn(0f, w.toFloat())
                 verts[idx + 1] = py
             }
@@ -181,6 +169,5 @@ class SbsWarper : Closeable {
     override fun close() {
         gpuWarper?.close()
         gpuWarper = null
-        depthEnhancer.close()
     }
 }
