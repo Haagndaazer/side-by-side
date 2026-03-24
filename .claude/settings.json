@@ -63,8 +63,40 @@
     "vibe-ragnar"
   ],
   "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run --directory C:\\Users\\colto\\Documents\\vibe-ragnar vibe-ragnar-prime"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv run --directory C:\\Users\\colto\\Documents\\vibe-ragnar vibe-ragnar-prime"
+          }
+        ]
+      }
+    ],
     "PreToolUse": [],
-    "PostToolUse": [],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python C:/Users/colto/Documents/vibe-ragnar/agents/hooks/post-commit.py"
+          }
+        ]
+      }
+    ],
     "Notification": [
       {
         "matcher": "",
