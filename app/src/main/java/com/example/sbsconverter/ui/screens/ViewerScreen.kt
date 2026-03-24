@@ -289,6 +289,10 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application) 
         glassesPresentation?.updateSwapEyes(swapEyes)
     }
 
+    fun updateGlassesTransform(scale: Float, offsetX: Float, offsetY: Float) {
+        glassesPresentation?.updateTransform(scale, offsetX, offsetY)
+    }
+
     fun dismissGlasses() {
         glassesPresentation?.dismiss()
         glassesPresentation = null
@@ -595,6 +599,9 @@ private fun SingleImageView(
                 modifier = Modifier.fillMaxSize(),
                 halfSbsMode = halfSbsMode,
                 swapEyes = swapEyes,
+                onTransformChanged = { s, ox, oy ->
+                    if (isGlassesActive) viewModel.updateGlassesTransform(s, ox, oy)
+                },
                 onSwipeLeft = { viewModel.loadNext() },
                 onSwipeRight = { viewModel.loadPrevious() },
                 onTap = {

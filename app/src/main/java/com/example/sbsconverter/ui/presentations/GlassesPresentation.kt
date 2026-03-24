@@ -39,6 +39,9 @@ class GlassesPresentation(
 
     private val _sbsImage = mutableStateOf<ImageBitmap?>(null)
     private val _swapEyes = mutableStateOf(false)
+    private val _scale = mutableStateOf(1f)
+    private val _offsetX = mutableStateOf(0f)
+    private val _offsetY = mutableStateOf(0f)
 
     private val lifecycleOwner = PresentationLifecycleOwner()
 
@@ -71,7 +74,10 @@ class GlassesPresentation(
                                 sbsImage = image,
                                 modifier = Modifier.fillMaxSize(),
                                 halfSbsMode = true,
-                                swapEyes = _swapEyes.value
+                                swapEyes = _swapEyes.value,
+                                externalScale = _scale.value,
+                                externalOffsetX = _offsetX.value,
+                                externalOffsetY = _offsetY.value
                             )
                         }
                     }
@@ -105,6 +111,12 @@ class GlassesPresentation(
 
     fun updateSwapEyes(swap: Boolean) {
         _swapEyes.value = swap
+    }
+
+    fun updateTransform(scale: Float, offsetX: Float, offsetY: Float) {
+        _scale.value = scale
+        _offsetX.value = offsetX
+        _offsetY.value = offsetY
     }
 }
 
