@@ -57,15 +57,19 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
+import android.hardware.display.DisplayManager
+import android.view.Display
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.sbsconverter.ui.components.StereoViewer
+import com.example.sbsconverter.ui.presentations.GlassesPresentation
 import com.example.sbsconverter.util.BitmapUtils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -224,7 +228,75 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    // ─── External Display (AR Glasses) ─────────────────────────────────────
+
+    private val _isGlassesConnected = MutableStateFlow(false)
+    val isGlassesConnected: StateFlow<Boolean> = _isGlassesConnected
+
+    private val _isGlassesActive = MutableStateFlow(false)
+    val isGlassesActive: StateFlow<Boolean> = _isGlassesActive
+
+    private var glassesPresentation: GlassesPresentation? = null
+    private var displayListener: DisplayManager.DisplayListener? = null
+
+    fun setupDisplayDetection(context: android.content.Context) {
+        val dm = context.getSystemService(android.content.Context.DISPLAY_SERVICE) as DisplayManager
+
+        // Check current displays
+        _isGlassesConnected.value = dm.displays.any { it.displayId != Display.DEFAULT_DISPLAY }
+
+        // Listen for changes
+        if (displayListener == null) {
+            displayListener = object : DisplayManager.DisplayListener {
+                override fun onDisplayAdded(displayId: Int) {
+                    _isGlassesConnected.value = true
+                }
+                override fun onDisplayRemoved(displayId: Int) {
+                    if (dm.displays.none { it.displayId != Display.DEFAULT_DISPLAY }) {
+                        _isGlassesConnected.value = false
+                        dismissGlasses()
+                    }
+                }
+                override fun onDisplayChanged(displayId: Int) {}
+            }
+            dm.registerDisplayListener(displayListener, android.os.Handler(android.os.Looper.getMainLooper()))
+        }
+    }
+
+    fun toggleGlasses(context: android.content.Context, swapEyes: Boolean) {
+        if (glassesPresentation != null) {
+            dismissGlasses()
+            return
+        }
+
+        val dm = context.getSystemService(android.content.Context.DISPLAY_SERVICE) as DisplayManager
+        val externalDisplay = dm.displays.firstOrNull { it.displayId != Display.DEFAULT_DISPLAY } ?: return
+        val image = _sbsImage.value ?: return
+
+        glassesPresentation = GlassesPresentation(context, externalDisplay) {
+            _isGlassesActive.value = false
+            glassesPresentation = null
+        }.apply {
+            updateImage(image)
+            updateSwapEyes(swapEyes)
+            show()
+        }
+        _isGlassesActive.value = true
+    }
+
+    fun updateGlassesContent(image: ImageBitmap, swapEyes: Boolean) {
+        glassesPresentation?.updateImage(image)
+        glassesPresentation?.updateSwapEyes(swapEyes)
+    }
+
+    fun dismissGlasses() {
+        glassesPresentation?.dismiss()
+        glassesPresentation = null
+        _isGlassesActive.value = false
+    }
+
     override fun onCleared() {
+        dismissGlasses()
         currentBitmap?.recycle()
         super.onCleared()
     }
@@ -465,6 +537,15 @@ private fun SingleImageView(
     val imageList by viewModel.imageList.collectAsState()
     val currentIndex by viewModel.currentIndex.collectAsState()
     val displayName by viewModel.displayName.collectAsState()
+    val isGlassesConnected by viewModel.isGlassesConnected.collectAsState()
+    val isGlassesActive by viewModel.isGlassesActive.collectAsState()
+
+    val context = LocalContext.current
+
+    // Detect external display (AR glasses)
+    LaunchedEffect(Unit) {
+        viewModel.setupDisplayDetection(context)
+    }
 
     BackHandler { onBackToGallery() }
 
@@ -477,6 +558,13 @@ private fun SingleImageView(
     LaunchedEffect(lastInteraction) {
         delay(4000)
         showControls = false
+    }
+
+    // Keep glasses presentation in sync with current image and settings
+    LaunchedEffect(sbsImage, swapEyes) {
+        if (isGlassesActive && sbsImage != null) {
+            viewModel.updateGlassesContent(sbsImage!!, swapEyes)
+        }
     }
 
     if (showDeleteDialog) {
@@ -624,6 +712,33 @@ private fun SingleImageView(
                                 contentAlignment = Alignment.Center
                             ) {
                                 Text("⇄", color = Color.White, style = MaterialTheme.typography.titleMedium)
+                            }
+                        }
+
+                        // Glasses button (only shown when external display detected)
+                        if (isGlassesConnected) {
+                            TooltipBox(
+                                positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+                                tooltip = { PlainTooltip { Text(if (isGlassesActive) "Disconnect from glasses" else "Send to AR glasses") } },
+                                state = rememberTooltipState()
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(52.dp)
+                                        .background(
+                                            if (isGlassesActive) MaterialTheme.colorScheme.primary.copy(alpha = 0.9f)
+                                            else Color.Black.copy(alpha = 0.6f),
+                                            CircleShape
+                                        )
+                                        .clickable {
+                                            viewModel.toggleGlasses(context, swapEyes)
+                                            lastInteraction = System.currentTimeMillis()
+                                        }
+                                        .semantics { contentDescription = "Toggle AR glasses display" },
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text("👓", style = MaterialTheme.typography.titleMedium)
+                                }
                             }
                         }
                     }

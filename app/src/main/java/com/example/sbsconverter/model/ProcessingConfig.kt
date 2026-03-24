@@ -4,7 +4,7 @@ data class ProcessingConfig(
     val depthScale: Float = 1f,
     val depthBlurKernel: Int = 3,
     val depthGamma: Float = 1f,
-    val convergencePoint: Float = 1f,
+    val convergencePoint: Float = 0.5f,
     val surfaceDetail: Float = 1f,
     val arrangement: Arrangement = Arrangement.CROSS_EYED
 ) {
