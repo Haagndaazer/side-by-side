@@ -1,5 +1,6 @@
 package com.example.sbsconverter.ui.components
 
+import android.graphics.Bitmap
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.gestures.awaitEachGesture
 import androidx.compose.foundation.gestures.awaitFirstDown
@@ -20,6 +21,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asAndroidBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.input.pointer.pointerInput
@@ -47,6 +50,8 @@ fun StereoViewer(
     onTap: (() -> Unit)? = null
 ) {
     val halfWidth = sbsImage.width / 2
+
+    // Full-res painters (used when halfSbsMode is off)
     val leftPainter = remember(sbsImage) {
         BitmapPainter(sbsImage, IntOffset.Zero, IntSize(halfWidth, sbsImage.height),
             filterQuality = FilterQuality.High)
@@ -56,9 +61,37 @@ fun StereoViewer(
             filterQuality = FilterQuality.High)
     }
 
+    // Filtered painters for halfSbsMode: same dimensions as originals but with
+    // high-frequency horizontal content removed via down-up round trip.
+    // This prevents aliasing when scaleX=0.5f is applied during GPU compositing.
+    val leftFiltered = remember(sbsImage, halfSbsMode) {
+        if (!halfSbsMode) return@remember null
+        val src = sbsImage.asAndroidBitmap()
+        val half = Bitmap.createBitmap(src, 0, 0, halfWidth, src.height)
+        val small = Bitmap.createScaledBitmap(half, halfWidth / 2, src.height, true)
+        half.recycle()
+        val filtered = Bitmap.createScaledBitmap(small, halfWidth, src.height, true)
+        small.recycle()
+        BitmapPainter(filtered.asImageBitmap(), filterQuality = FilterQuality.High)
+    }
+    val rightFiltered = remember(sbsImage, halfSbsMode) {
+        if (!halfSbsMode) return@remember null
+        val src = sbsImage.asAndroidBitmap()
+        val half = Bitmap.createBitmap(src, halfWidth, 0, halfWidth, src.height)
+        val small = Bitmap.createScaledBitmap(half, halfWidth / 2, src.height, true)
+        half.recycle()
+        val filtered = Bitmap.createScaledBitmap(small, halfWidth, src.height, true)
+        small.recycle()
+        BitmapPainter(filtered.asImageBitmap(), filterQuality = FilterQuality.High)
+    }
+
+    // Use filtered painters for halfSbsMode, full-res otherwise
+    val effectiveLeft = if (halfSbsMode && leftFiltered != null) leftFiltered else leftPainter
+    val effectiveRight = if (halfSbsMode && rightFiltered != null) rightFiltered else rightPainter
+
     // Swap eyes if toggled
-    val firstPainter = if (swapEyes) rightPainter else leftPainter
-    val secondPainter = if (swapEyes) leftPainter else rightPainter
+    val firstPainter = if (swapEyes) effectiveRight else effectiveLeft
+    val secondPainter = if (swapEyes) effectiveLeft else effectiveRight
 
     // Use external state if provided (glasses follow phone), otherwise internal
     var internalScale by remember { mutableFloatStateOf(1f) }
@@ -206,8 +239,6 @@ private fun StereoPane(
             modifier = Modifier
                 .fillMaxSize()
                 .graphicsLayer {
-                    // Half SBS: pre-squeeze horizontally by 50% so glasses' unsqueeze
-                    // (2x width) restores correct aspect ratio. Works for all aspect ratios.
                     scaleX = if (halfSbsMode) scale * 0.5f else scale
                     scaleY = scale
                     translationX = offsetX
