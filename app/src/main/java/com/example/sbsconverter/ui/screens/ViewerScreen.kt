@@ -1,11 +1,16 @@
 package com.example.sbsconverter.ui.screens
 
+import android.Manifest
 import android.app.Application
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.net.Uri
+import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -66,6 +71,9 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import android.hardware.display.DisplayManager
 import android.view.Display
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.sbsconverter.ui.components.StereoViewer
@@ -100,7 +108,26 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application) 
     private val _showGallery = MutableStateFlow(true)
     val showGallery: StateFlow<Boolean> = _showGallery
 
+    private val _hasMediaPermission = MutableStateFlow(false)
+    val hasMediaPermission: StateFlow<Boolean> = _hasMediaPermission
+
     private var currentBitmap: Bitmap? = null
+
+    fun checkMediaPermission(context: android.content.Context): Boolean {
+        val permission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            Manifest.permission.READ_MEDIA_IMAGES
+        } else {
+            Manifest.permission.READ_EXTERNAL_STORAGE
+        }
+        val granted = ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED
+        _hasMediaPermission.value = granted
+        return granted
+    }
+
+    fun onPermissionResult(granted: Boolean) {
+        _hasMediaPermission.value = granted
+        if (granted) refreshFolder()
+    }
 
     fun initialize(initialUri: Uri?) {
         viewModelScope.launch {
@@ -336,9 +363,29 @@ private fun GalleryView(
     onNavigateBack: () -> Unit
 ) {
     val imageList by viewModel.imageList.collectAsState()
+    val hasMediaPermission by viewModel.hasMediaPermission.collectAsState()
     var selectedUris by remember { mutableStateOf<Set<Uri>>(emptySet()) }
     val isSelecting = selectedUris.isNotEmpty()
     var showDeleteDialog by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+
+    val mediaPermission = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        Manifest.permission.READ_MEDIA_IMAGES
+    } else {
+        Manifest.permission.READ_EXTERNAL_STORAGE
+    }
+
+    val permissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        viewModel.onPermissionResult(granted)
+    }
+
+    LaunchedEffect(Unit) {
+        if (!viewModel.checkMediaPermission(context)) {
+            permissionLauncher.launch(mediaPermission)
+        }
+    }
 
     BackHandler {
         if (isSelecting) selectedUris = emptySet()
@@ -424,11 +471,29 @@ private fun GalleryView(
                 modifier = Modifier.fillMaxSize().padding(innerPadding),
                 contentAlignment = Alignment.Center
             ) {
-                Text(
-                    "No SBS images found",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(
+                        if (!hasMediaPermission) "Grant photo access to see all images"
+                        else "No SBS images found",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    if (!hasMediaPermission) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        TooltipBox(
+                            positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+                            tooltip = { PlainTooltip { Text("Request permission to read photos from gallery") } },
+                            state = rememberTooltipState()
+                        ) {
+                            Button(
+                                onClick = { permissionLauncher.launch(mediaPermission) },
+                                modifier = Modifier.semantics { contentDescription = "Grant photo access button" }
+                            ) {
+                                Text("Grant Access")
+                            }
+                        }
+                    }
+                }
             }
         } else {
             LazyVerticalGrid(
