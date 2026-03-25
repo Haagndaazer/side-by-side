@@ -1,6 +1,9 @@
 package com.example.sbsconverter
 
 import android.app.Application
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import com.example.sbsconverter.processing.BatchProcessingState
 import com.example.sbsconverter.processing.DepthEstimator
 import com.example.sbsconverter.processing.ImageProcessor
 import com.example.sbsconverter.util.ModelManager
@@ -23,6 +26,7 @@ class SbsApplication : Application() {
         private set
 
     val imageProcessor = ImageProcessor()
+    val batchProcessingState = BatchProcessingState()
 
     private val _isModelReady = MutableStateFlow(false)
     val isModelReady: StateFlow<Boolean> = _isModelReady
@@ -36,6 +40,13 @@ class SbsApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         modelManager = ModelManager(this)
+
+        val channel = NotificationChannel(
+            CHANNEL_BATCH_PROCESSING,
+            "Batch Processing",
+            NotificationManager.IMPORTANCE_LOW
+        )
+        getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
 
         appScope.launch {
             try {
@@ -57,5 +68,9 @@ class SbsApplication : Application() {
                 _modelStatusText.value = "Failed to load model: ${e.message}"
             }
         }
+    }
+
+    companion object {
+        const val CHANNEL_BATCH_PROCESSING = "batch_processing"
     }
 }

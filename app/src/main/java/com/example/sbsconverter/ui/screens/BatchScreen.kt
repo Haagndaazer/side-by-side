@@ -1,9 +1,13 @@
 package com.example.sbsconverter.ui.screens
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -82,8 +86,17 @@ fun BatchScreen(
     val modelLoadProgress by viewModel.modelLoadProgress.collectAsState()
     val oddImageWarning by viewModel.oddImageWarning.collectAsState()
 
-    BackHandler(enabled = isProcessing) { /* blocked */ }
-    BackHandler(enabled = !isProcessing) { onNavigateBack() }
+    BackHandler { onNavigateBack() }
+
+    val context = LocalContext.current
+
+    // POST_NOTIFICATIONS permission for Android 13+
+    val notificationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { _ ->
+        // Start processing regardless of permission result
+        viewModel.startProcessing()
+    }
 
     val pickMultipleMedia = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickMultipleVisualMedia()
@@ -104,18 +117,16 @@ fun BatchScreen(
             TopAppBar(
                 title = { Text("Batch Convert") },
                 navigationIcon = {
-                    if (!isProcessing) {
-                        TooltipBox(
-                            positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
-                            tooltip = { PlainTooltip { Text("Return to single image mode") } },
-                            state = rememberTooltipState()
+                    TooltipBox(
+                        positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+                        tooltip = { PlainTooltip { Text("Return to single image mode") } },
+                        state = rememberTooltipState()
+                    ) {
+                        IconButton(
+                            onClick = onNavigateBack,
+                            modifier = Modifier.semantics { contentDescription = "Back button" }
                         ) {
-                            IconButton(
-                                onClick = onNavigateBack,
-                                modifier = Modifier.semantics { contentDescription = "Back button" }
-                            ) {
-                                Text("←", style = MaterialTheme.typography.titleLarge)
-                            }
+                            Text("←", style = MaterialTheme.typography.titleLarge)
                         }
                     }
                 }
@@ -309,8 +320,18 @@ fun BatchScreen(
                     ) {
                         Button(
                             onClick = {
-                                if (isProcessing) viewModel.cancelProcessing()
-                                else viewModel.startProcessing()
+                                if (isProcessing) {
+                                    viewModel.cancelProcessing()
+                                } else {
+                                    // Request notification permission on Android 13+ before starting
+                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                                        ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+                                    ) {
+                                        notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                                    } else {
+                                        viewModel.startProcessing()
+                                    }
+                                }
                             },
                             enabled = canOperate && (isProcessing || hasPending),
                             modifier = Modifier

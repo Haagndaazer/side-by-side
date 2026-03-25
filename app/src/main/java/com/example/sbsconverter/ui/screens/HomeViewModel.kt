@@ -102,6 +102,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val _imageDimensions = MutableStateFlow<Pair<Int, Int>?>(null)
     val imageDimensions: StateFlow<Pair<Int, Int>?> = _imageDimensions
 
+    val isBatchProcessing: StateFlow<Boolean> = app.batchProcessingState.isProcessing
+
     private val _isSaving = MutableStateFlow(false)
     val isSaving: StateFlow<Boolean> = _isSaving
 
@@ -109,6 +111,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     val saveSuccess: StateFlow<Boolean?> = _saveSuccess
 
     fun onImageSelected(uri: Uri) {
+        if (app.batchProcessingState.isProcessing.value) return
         val context = getApplication<Application>()
         viewModelScope.launch {
             resetForNewImage()
@@ -201,6 +204,7 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun generateSbs() {
+        if (app.batchProcessingState.isProcessing.value) return
         val bitmap = sourceBitmap ?: return
         val rawDepth = cachedRawDepth ?: return
         viewModelScope.launch {
