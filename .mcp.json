@@ -12,6 +12,13 @@
       "env": {
         "REPO_PATH":"C:/Users/colto/Documents/Projects/side-by-side"
       }
+    },
+    "vibe-cognition": {
+      "command": "uv",
+      "args": ["run", "--directory", "C:\\Users\\colto\\Documents\\vibe-cognition", "python", "-m", "vibe_cognition.server"],
+      "env": {
+        "REPO_PATH": "C:/Users/colto/Documents/Projects/side-by-side"
+      }
     }
   }
 }
