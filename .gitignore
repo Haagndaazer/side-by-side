@@ -150,6 +150,7 @@ TeammateComms/
 
 # Embeddings (vibe-ragnar index)
 .embeddings/
+.cognition/chromadb
 
 # Root-level test images (dev artifacts, not bundled in app)
 test-images/
