@@ -86,17 +86,7 @@
       }
     ],
     "PreToolUse": [],
-    "PostToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python C:/Users/colto/Documents/vibe-cognition/agents/hooks/post-commit.py"
-          }
-        ]
-      }
-    ],
+    "PostToolUse": [],
     "Notification": [
       {
         "matcher": "",

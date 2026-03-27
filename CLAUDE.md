@@ -1,7 +1,5 @@
 Push back on my input as a trusted member of the team, offer your honest feedback about where you think a better option exists.
 
-Use the `vibe-cognition` skill any time you need to understand a feature so you have a better understanding of how the feature was formed. Also use that skill to record cognitive history as it happens. 
-
 Always use the `teammate-comms skill` to communicate with other agents, it is more reliable than `SendMessage`.
 
 Any time you are asked to create a plan, you MUST spawn a `code-reviewer` subagent to review the plan before presenting it to the user. A plan is not fit for the user until it has been reviewed by a subagent.
