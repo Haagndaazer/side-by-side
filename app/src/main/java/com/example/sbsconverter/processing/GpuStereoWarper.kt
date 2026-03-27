@@ -11,7 +11,6 @@ import android.graphics.Shader
 import android.hardware.HardwareBuffer
 import android.media.ImageReader
 import android.os.Build
-import android.util.Half
 import android.util.Log
 import androidx.annotation.RequiresApi
 import java.io.Closeable
@@ -32,13 +31,38 @@ class GpuStereoWarper : Closeable {
             uniform float direction;
             uniform float fadeWidth;
 
+            // Decode 24-bit packed depth from ARGB_8888 texel.
+            // floor(x+0.5) rounds to counter half-precision loss from eval() returning half4.
+            float decodeDepth(half4 texel) {
+                float r = floor(float(texel.r) * 255.0 + 0.5);
+                float g = floor(float(texel.g) * 255.0 + 0.5);
+                float b = floor(float(texel.b) * 255.0 + 0.5);
+                return (r * 65536.0 + g * 256.0 + b) / 16777215.0;
+            }
+
+            // Manual bilinear interpolation of packed depth.
+            // Hardware bilinear would interpolate raw bytes, not decoded depth.
+            float sampleDepth(float2 coord) {
+                coord = clamp(coord, float2(0.0), depthSize - 1.0);
+                float2 base = floor(coord);
+                float2 f = coord - base;
+                float2 next = min(base + 1.0, depthSize - 1.0);
+
+                float d00 = decodeDepth(depthMap.eval(base + 0.5));
+                float d10 = decodeDepth(depthMap.eval(float2(next.x, base.y) + 0.5));
+                float d01 = decodeDepth(depthMap.eval(float2(base.x, next.y) + 0.5));
+                float d11 = decodeDepth(depthMap.eval(next + 0.5));
+
+                return mix(mix(d00, d10, f.x), mix(d01, d11, f.x), f.y);
+            }
+
             half4 main(float2 fragCoord) {
                 // Map output pixel to depth map coordinates
                 float2 normCoord = fragCoord / imageSize;
                 float2 depthCoord = normCoord * (depthSize - 1.0);
 
-                // Sample depth (F16 precision) and compute base shift
-                float depth = float(depthMap.eval(depthCoord).r);
+                // Sample depth (24-bit packed precision) and compute base shift
+                float depth = sampleDepth(depthCoord);
                 float adjustedDepth = depth - convergencePoint;
                 float baseShift = adjustedDepth * maxDisparity * direction;
 
@@ -110,14 +134,17 @@ class GpuStereoWarper : Closeable {
         s.setFloatUniform("direction", if (isLeftEye) -1f else 1f)
         s.setFloatUniform("fadeWidth", w * edgeFadePercent)
 
-        // Source image
-        s.setInputBuffer("sourceImage",
-            BitmapShader(sourceBitmap, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP))
+        // Source image — LINEAR for smooth color sampling during backward warp
+        val sourceShader = BitmapShader(sourceBitmap, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
+        sourceShader.setFilterMode(BitmapShader.FILTER_MODE_LINEAR)
+        s.setInputBuffer("sourceImage", sourceShader)
 
-        // Depth map — F16 encoding for ~2048 depth levels (vs 256 with 8-bit)
-        val depthBitmap = floatArrayToF16Bitmap(depthMap, depthSize, depthSize)
-        s.setInputBuffer("depthMap",
-            BitmapShader(depthBitmap, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP))
+        // Depth map — 24-bit packed encoding (~16.7M depth levels)
+        // NEAREST required: shader decodes each texel before manual bilinear interpolation
+        val depthBitmap = floatArrayToPackedBitmap(depthMap, depthSize, depthSize)
+        val depthShader = BitmapShader(depthBitmap, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
+        depthShader.setFilterMode(BitmapShader.FILTER_MODE_NEAREST)
+        s.setInputBuffer("depthMap", depthShader)
 
         val result = renderShader(s, w, h)
         depthBitmap.recycle()
@@ -164,23 +191,22 @@ class GpuStereoWarper : Closeable {
     }
 
     /**
-     * Encode depth FloatArray as RGBA_F16 bitmap for full half-float precision.
-     * F16 gives ~2048 usable depth levels in [0,1] vs 256 with 8-bit grayscale.
-     * Proven pattern from GpuBilateralFilter — F16 input bitmaps work on Pixel 10.
+     * Encode depth FloatArray as 24-bit packed ARGB_8888 bitmap.
+     * Each float [0,1] is scaled to a 24-bit integer and distributed across R(high), G(mid), B(low).
+     * Gives ~16.7M depth levels vs ~2048 with F16, and uses half the memory (4 vs 8 bytes/pixel).
+     * The AGSL shader decodes via decodeDepth() and does manual bilinear interpolation.
      */
-    private fun floatArrayToF16Bitmap(data: FloatArray, width: Int, height: Int): Bitmap {
-        val buffer = java.nio.ShortBuffer.allocate(data.size * 4)
-        val oneHalf = Half.toHalf(1f)
+    private fun floatArrayToPackedBitmap(data: FloatArray, width: Int, height: Int): Bitmap {
+        val pixels = IntArray(data.size)
         for (i in data.indices) {
-            val h = Half.toHalf(data[i].coerceIn(0f, 1f))
-            buffer.put(h)       // R
-            buffer.put(h)       // G
-            buffer.put(h)       // B
-            buffer.put(oneHalf) // A
+            val v = (data[i].coerceIn(0f, 1f) * 16777215f + 0.5f).toInt()
+            val r = (v shr 16) and 0xFF
+            val g = (v shr 8) and 0xFF
+            val b = v and 0xFF
+            pixels[i] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
         }
-        buffer.rewind()
-        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.RGBA_F16)
-        bitmap.copyPixelsFromBuffer(buffer)
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        bitmap.setPixels(pixels, 0, width, 0, 0, width, height)
         return bitmap
     }
 
