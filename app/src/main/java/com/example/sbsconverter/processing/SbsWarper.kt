@@ -2,16 +2,19 @@ package com.example.sbsconverter.processing
 
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.graphics.Gainmap
 import android.os.Build
 import android.util.Log
 import com.example.sbsconverter.model.Arrangement
 import com.example.sbsconverter.model.ProcessingConfig
 import com.example.sbsconverter.model.SbsResult
+import com.example.sbsconverter.util.BitmapUtils
 import java.io.Closeable
 
 class SbsWarper : Closeable {
 
     companion object {
+        private const val TAG = "SbsWarper"
         private const val DEPTH_SIZE = 1022
         private const val MAX_MESH_DIM = 256
         private const val MESH_DIVISOR = 8
@@ -27,37 +30,117 @@ class SbsWarper : Closeable {
         config: ProcessingConfig,
         depthRange: Float = 1f
     ): SbsResult {
-        // Scene-aware disparity: deeper scenes (larger rawRange) get more parallax
         val maxDisparity = config.depthScale / 100f * sourceBitmap.width / 2f * depthRange
 
-        // Try GPU per-pixel warp (API 33+), fall back to CPU mesh warp
-        val eyes = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        // Warp base image into left/right eye views
+        val (leftEye, rightEye) = warpPair(sourceBitmap, processedDepth, config, maxDisparity)
+        val combined = combineViews(leftEye, rightEye, sourceBitmap.width, sourceBitmap.height, config)
+        leftEye.recycle()
+        rightEye.recycle()
+
+        // Warp gainmap with same displacement if source is Ultra HDR (API 34+)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && sourceBitmap.hasGainmap()) {
+            try {
+                attachWarpedGainmap(sourceBitmap, combined, processedDepth, config, maxDisparity)
+            } catch (e: Exception) {
+                Log.w(TAG, "Gainmap warp failed, output will be SDR: ${e.message}")
+            }
+        }
+
+        return SbsResult(sbsBitmap = combined)
+    }
+
+    /**
+     * Warp a bitmap into left and right eye views using GPU (preferred) or CPU fallback.
+     */
+    private fun warpPair(
+        bitmap: Bitmap,
+        processedDepth: FloatArray,
+        config: ProcessingConfig,
+        maxDisparity: Float
+    ): Pair<Bitmap, Bitmap> {
+        val gpuResult = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             val gpu = getOrCreateGpuWarper()
             if (gpu != null && gpu.gpuAvailable) {
                 try {
                     Pair(
-                        gpu.warpEye(sourceBitmap, processedDepth,
+                        gpu.warpEye(bitmap, processedDepth,
                             isLeftEye = true, maxDisparity, config.convergencePoint, EDGE_FADE_PERCENT),
-                        gpu.warpEye(sourceBitmap, processedDepth,
+                        gpu.warpEye(bitmap, processedDepth,
                             isLeftEye = false, maxDisparity, config.convergencePoint, EDGE_FADE_PERCENT)
                     )
                 } catch (e: Exception) {
-                    Log.w("SbsWarper", "GPU warp failed, falling back to CPU: ${e.message}")
+                    Log.w(TAG, "GPU warp failed, falling back to CPU: ${e.message}")
                     null
                 }
             } else null
         } else null
 
-        val (leftEye, rightEye) = eyes ?: Pair(
-            warpEyeCpu(sourceBitmap, processedDepth, true, config, maxDisparity),
-            warpEyeCpu(sourceBitmap, processedDepth, false, config, maxDisparity)
+        return gpuResult ?: Pair(
+            warpEyeCpu(bitmap, processedDepth, true, config, maxDisparity),
+            warpEyeCpu(bitmap, processedDepth, false, config, maxDisparity)
         )
+    }
 
-        val combined = combineViews(leftEye, rightEye, sourceBitmap.width, sourceBitmap.height, config)
-        leftEye.recycle()
-        rightEye.recycle()
+    /**
+     * Warp the source bitmap's gainmap and attach it to the SBS output.
+     * The gainmap is warped with the same displacement as the base image so
+     * HDR brightness boosts stay aligned with their corresponding pixels.
+     */
+    @androidx.annotation.RequiresApi(Build.VERSION_CODES.UPSIDE_DOWN_CAKE)
+    private fun attachWarpedGainmap(
+        sourceBitmap: Bitmap,
+        sbsBitmap: Bitmap,
+        processedDepth: FloatArray,
+        config: ProcessingConfig,
+        maxDisparity: Float
+    ) {
+        val sourceGainmap = sourceBitmap.gainmap ?: return
+        var gainmapBitmap = sourceGainmap.gainmapContents
 
-        return SbsResult(sbsBitmap = combined)
+        Log.d(TAG, "Ultra HDR: gainmap ${gainmapBitmap.width}x${gainmapBitmap.height} config=${gainmapBitmap.config}")
+
+        // ALPHA_8 bitmaps produce half4(0,0,0,a) in shaders — convert to ARGB_8888
+        val needsAlphaConversion = gainmapBitmap.config == Bitmap.Config.ALPHA_8
+        if (needsAlphaConversion) {
+            val converted = BitmapUtils.convertAlpha8ToArgb(gainmapBitmap)
+            gainmapBitmap = converted
+        }
+
+        // Scale gainmap to match source dimensions for consistent warp coordinates
+        val needsScale = gainmapBitmap.width != sourceBitmap.width || gainmapBitmap.height != sourceBitmap.height
+        val prepared = if (needsScale) {
+            val scaled = Bitmap.createScaledBitmap(gainmapBitmap, sourceBitmap.width, sourceBitmap.height, true)
+            if (needsAlphaConversion) gainmapBitmap.recycle()
+            scaled
+        } else {
+            gainmapBitmap
+        }
+
+        // Warp with identical displacement as the base image
+        val (leftGm, rightGm) = warpPair(prepared, processedDepth, config, maxDisparity)
+        val combinedGm = combineViews(leftGm, rightGm, sourceBitmap.width, sourceBitmap.height, config)
+        leftGm.recycle()
+        rightGm.recycle()
+        if (prepared !== sourceGainmap.gainmapContents) prepared.recycle()
+
+        // Copy all metadata from original gainmap
+        val newGainmap = Gainmap(combinedGm)
+        val ratioMin = sourceGainmap.ratioMin
+        newGainmap.setRatioMin(ratioMin[0], ratioMin[1], ratioMin[2])
+        val ratioMax = sourceGainmap.ratioMax
+        newGainmap.setRatioMax(ratioMax[0], ratioMax[1], ratioMax[2])
+        val gamma = sourceGainmap.gamma
+        newGainmap.setGamma(gamma[0], gamma[1], gamma[2])
+        val epsilonSdr = sourceGainmap.epsilonSdr
+        newGainmap.setEpsilonSdr(epsilonSdr[0], epsilonSdr[1], epsilonSdr[2])
+        val epsilonHdr = sourceGainmap.epsilonHdr
+        newGainmap.setEpsilonHdr(epsilonHdr[0], epsilonHdr[1], epsilonHdr[2])
+        newGainmap.setDisplayRatioForFullHdr(sourceGainmap.displayRatioForFullHdr)
+        newGainmap.setMinDisplayRatioForHdrTransition(sourceGainmap.minDisplayRatioForHdrTransition)
+
+        sbsBitmap.setGainmap(newGainmap)
+        Log.d(TAG, "Ultra HDR: gainmap attached to SBS output (${combinedGm.width}x${combinedGm.height})")
     }
 
     @androidx.annotation.RequiresApi(Build.VERSION_CODES.TIRAMISU)

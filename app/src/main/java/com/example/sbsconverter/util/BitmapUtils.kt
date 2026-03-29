@@ -289,6 +289,25 @@ object BitmapUtils {
         }
     }
 
+    /**
+     * Convert an ALPHA_8 bitmap to ARGB_8888 with the alpha value replicated to all RGB channels.
+     * Needed for gainmap warping — ALPHA_8 bitmaps produce half4(0,0,0,a) in shaders,
+     * which would render as black instead of preserving the luminance boost value.
+     */
+    fun convertAlpha8ToArgb(alpha: Bitmap): Bitmap {
+        val w = alpha.width
+        val h = alpha.height
+        val pixels = IntArray(w * h)
+        alpha.getPixels(pixels, 0, w, 0, 0, w, h)
+        for (i in pixels.indices) {
+            val a = (pixels[i] ushr 24) and 0xFF
+            pixels[i] = (0xFF shl 24) or (a shl 16) or (a shl 8) or a
+        }
+        val argb = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        argb.setPixels(pixels, 0, w, 0, 0, w, h)
+        return argb
+    }
+
     fun loadBitmapFromAsset(context: Context, assetPath: String): Bitmap? {
         return try {
             context.assets.open(assetPath).use { BitmapFactory.decodeStream(it) }

@@ -3,6 +3,7 @@ package com.example.sbsconverter.ui.screens
 import android.app.Application
 import android.graphics.Bitmap
 import android.net.Uri
+import android.os.Build
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.lifecycle.AndroidViewModel
@@ -260,7 +261,10 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
             _isSaving.value = true
             try {
                 val dateTaken = sourceUri?.let { GalleryUtils.getDateTaken(getApplication(), it) }
-                val uri = GalleryUtils.saveBitmapToGallery(getApplication(), sbs, dateTakenMs = dateTaken)
+                val isHdr = Build.VERSION.SDK_INT >= 34 && sbs.hasGainmap()
+                val uri = GalleryUtils.saveBitmapToGallery(
+                    getApplication(), sbs, dateTakenMs = dateTaken, isUltraHdr = isHdr
+                )
                 _saveSuccess.value = (uri != null)
             } catch (e: Exception) {
                 _errorMessage.value = "Save failed: ${e.message}"

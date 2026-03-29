@@ -171,11 +171,13 @@ class BatchProcessingService : Service() {
                     }
 
                     val dateTaken = GalleryUtils.getDateTaken(this@BatchProcessingService, item.uri)
+                    val isHdr = android.os.Build.VERSION.SDK_INT >= 34 && result.sbsBitmap.hasGainmap()
                     val savedUri = withContext(Dispatchers.IO) {
                         GalleryUtils.saveBitmapToGallery(
                             this@BatchProcessingService, result.sbsBitmap,
                             "SBS_${item.displayName.substringBeforeLast(".")}_${System.currentTimeMillis()}",
-                            dateTakenMs = dateTaken
+                            dateTakenMs = dateTaken,
+                            isUltraHdr = isHdr
                         )
                     }
 
@@ -246,11 +248,13 @@ class BatchProcessingService : Service() {
                     }
 
                     val dateTaken = GalleryUtils.getDateTaken(this@BatchProcessingService, pair.leftUri)
+                    val isHdr = android.os.Build.VERSION.SDK_INT >= 34 && sbsBitmap.hasGainmap()
                     val savedUri = withContext(Dispatchers.IO) {
                         GalleryUtils.saveBitmapToGallery(
                             this@BatchProcessingService, sbsBitmap,
                             "SBS_PAIR_${pair.leftDisplayName.substringBeforeLast(".")}_${System.currentTimeMillis()}",
-                            dateTakenMs = dateTaken
+                            dateTakenMs = dateTaken,
+                            isUltraHdr = isHdr
                         )
                     }
                     sbsBitmap.recycle()

@@ -40,7 +40,8 @@ object GalleryUtils {
         context: Context,
         bitmap: Bitmap,
         displayName: String = "SBS_${System.currentTimeMillis()}",
-        dateTakenMs: Long? = null
+        dateTakenMs: Long? = null,
+        isUltraHdr: Boolean = false
     ): Uri? = withContext(Dispatchers.IO) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
             return@withContext null
@@ -71,7 +72,9 @@ object GalleryUtils {
             // The MediaStore scanner runs when IS_PENDING flips to 0 and overwrites
             // DATE_TAKEN from the JPEG's EXIF DateTimeOriginal. Without EXIF tags,
             // the scanner defaults to "now".
-            if (dateTakenMs != null) {
+            // SKIP for Ultra HDR: ExifInterface.saveAttributes() strips post-EOI
+            // trailing data where the JPEG_R gainmap secondary image lives.
+            if (dateTakenMs != null && !isUltraHdr) {
                 val exifDate = SimpleDateFormat("yyyy:MM:dd HH:mm:ss", Locale.US)
                     .format(Date(dateTakenMs))
                 val tzOffset = SimpleDateFormat("XXX", Locale.US)
