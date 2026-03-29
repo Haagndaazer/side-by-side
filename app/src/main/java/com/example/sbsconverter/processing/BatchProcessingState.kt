@@ -6,6 +6,7 @@ import com.example.sbsconverter.model.BatchItem
 import com.example.sbsconverter.model.BatchItemStatus
 import com.example.sbsconverter.model.BatchMode
 import com.example.sbsconverter.model.BatchPairItem
+import com.example.sbsconverter.util.CalibrationInfo
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import java.util.concurrent.atomic.AtomicLong
@@ -75,6 +76,18 @@ class BatchProcessingState {
         _items.value = _items.value.map {
             if (it.id == id) it.copy(status = status, errorMessage = errorMessage, resultUri = resultUri)
             else it
+        }
+    }
+
+    fun updateItemCalibrationInfo(id: Long, info: CalibrationInfo?) {
+        _items.value = _items.value.map {
+            if (it.id == id) it.copy(calibrationInfo = info) else it
+        }
+    }
+
+    fun updatePairCalibrationInfo(id: Long, info: CalibrationInfo?) {
+        _pairItems.value = _pairItems.value.map {
+            if (it.id == id) it.copy(calibrationInfo = info) else it
         }
     }
 

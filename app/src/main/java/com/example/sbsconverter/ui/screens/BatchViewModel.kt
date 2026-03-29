@@ -6,13 +6,18 @@ import android.net.Uri
 import android.provider.OpenableColumns
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
 import com.example.sbsconverter.SbsApplication
 import com.example.sbsconverter.model.BatchItem
 import com.example.sbsconverter.model.BatchItemStatus
 import com.example.sbsconverter.model.BatchMode
 import com.example.sbsconverter.model.BatchPairItem
 import com.example.sbsconverter.processing.BatchProcessingService
+import com.example.sbsconverter.util.ExifDepthCalibrator
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class BatchViewModel(application: Application) : AndroidViewModel(application) {
 
@@ -66,6 +71,19 @@ class BatchViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
         state.setItems(state.items.value + newItems)
+        loadMetadataForItems(newItems)
+    }
+
+    private fun loadMetadataForItems(items: List<BatchItem>) {
+        val context = getApplication<Application>()
+        viewModelScope.launch {
+            for (item in items) {
+                val info = withContext(Dispatchers.IO) {
+                    ExifDepthCalibrator.readMetadata(context, item.uri)
+                }
+                if (info != null) state.updateItemCalibrationInfo(item.id, info)
+            }
+        }
     }
 
     private fun onPairImagesSelected(uris: List<Uri>) {
@@ -82,6 +100,19 @@ class BatchViewModel(application: Application) : AndroidViewModel(application) {
             )
         }
         state.setPairItems(state.pairItems.value + pairs)
+        loadMetadataForPairs(pairs)
+    }
+
+    private fun loadMetadataForPairs(pairs: List<BatchPairItem>) {
+        val context = getApplication<Application>()
+        viewModelScope.launch {
+            for (pair in pairs) {
+                val info = withContext(Dispatchers.IO) {
+                    ExifDepthCalibrator.readMetadata(context, pair.leftUri)
+                }
+                if (info != null) state.updatePairCalibrationInfo(pair.id, info)
+            }
+        }
     }
 
     fun removeItem(id: Long) {

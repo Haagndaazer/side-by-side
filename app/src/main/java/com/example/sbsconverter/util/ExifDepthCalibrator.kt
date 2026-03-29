@@ -99,6 +99,22 @@ object ExifDepthCalibrator {
         )
     }
 
+    /**
+     * Lightweight EXIF reader for display metadata only (no depthScale computation).
+     * Used by batch items to show metadata chips before processing starts.
+     */
+    fun readMetadata(context: Context, uri: Uri): CalibrationInfo? {
+        return try {
+            context.contentResolver.openInputStream(uri)?.use { stream ->
+                val exif = ExifInterface(stream)
+                computeFromExif(exif, 0f, 0)
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "EXIF metadata read failed: ${e.message}")
+            null
+        }
+    }
+
     private fun classifyLens(focalLength35mm: Int): String = when {
         focalLength35mm <= 16 -> "Ultrawide"
         focalLength35mm <= 40 -> "Wide"

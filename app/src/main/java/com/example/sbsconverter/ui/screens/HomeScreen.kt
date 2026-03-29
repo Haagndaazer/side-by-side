@@ -69,6 +69,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
+import com.example.sbsconverter.ui.components.MetadataChip
 import com.example.sbsconverter.ui.components.StereoViewer
 import com.example.sbsconverter.model.Arrangement as SbsArrangement
 import com.example.sbsconverter.model.ProcessingConfig
@@ -615,28 +616,6 @@ private fun ConvergenceOverlay(
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-private fun MetadataChip(text: String) {
-    TooltipBox(
-        positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
-        tooltip = { PlainTooltip { Text(text) } },
-        state = rememberTooltipState()
-    ) {
-        Surface(
-            shape = RoundedCornerShape(12.dp),
-            color = MaterialTheme.colorScheme.surfaceVariant,
-            modifier = Modifier.semantics { contentDescription = "Photo metadata: $text" }
-        ) {
-            Text(
-                text = text,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
-            )
-        }
-    }
-}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

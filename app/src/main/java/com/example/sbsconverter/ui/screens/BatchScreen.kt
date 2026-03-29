@@ -63,6 +63,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.sbsconverter.model.BatchItem
 import com.example.sbsconverter.model.BatchItemStatus
+import com.example.sbsconverter.ui.components.MetadataChip
 import com.example.sbsconverter.model.BatchMode
 import com.example.sbsconverter.model.BatchPairItem
 import com.example.sbsconverter.util.BitmapUtils
@@ -413,6 +414,18 @@ private fun BatchItemRow(
                 StatusIcon(item.status, canRemove, onRemove, item.displayName)
             }
 
+            // EXIF metadata chips
+            item.calibrationInfo?.let { info ->
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 2.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    MetadataChip("${info.lens} ${info.focalLength35mm}mm")
+                    MetadataChip("${"%.1f".format(info.focusDistanceM)}m")
+                    MetadataChip(info.sceneType)
+                }
+            }
+
             // SBS result preview
             if (item.status == BatchItemStatus.DONE && item.resultUri != null) {
                 ResultPreview(item.resultUri, item.displayName, onTap = onViewResult)
@@ -484,6 +497,18 @@ private fun BatchPairItemRow(
                 }
                 StatusIcon(pair.status, canRemove, onRemove,
                     "${pair.leftDisplayName} + ${pair.rightDisplayName}")
+            }
+
+            // EXIF metadata chips (from left image)
+            pair.calibrationInfo?.let { info ->
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 2.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    MetadataChip("${info.lens} ${info.focalLength35mm}mm")
+                    MetadataChip("${"%.1f".format(info.focusDistanceM)}m")
+                    MetadataChip(info.sceneType)
+                }
             }
 
             // SBS result preview
