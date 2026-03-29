@@ -2,6 +2,8 @@ package com.example.sbsconverter.ui.presentations
 
 import android.app.Presentation
 import android.content.Context
+import android.content.pm.ActivityInfo
+import android.os.Build
 import android.os.Bundle
 import android.view.Display
 import androidx.compose.foundation.background
@@ -47,6 +49,9 @@ class GlassesPresentation(
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            window?.colorMode = ActivityInfo.COLOR_MODE_HDR
+        }
         setOnDismissListener { onDismissed() }
 
         // Initialize lifecycle
