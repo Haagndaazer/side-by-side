@@ -13,6 +13,8 @@ import com.example.sbsconverter.model.ProcessingConfig
 import com.example.sbsconverter.model.SbsResult
 import com.example.sbsconverter.processing.DepthEstimator
 import com.example.sbsconverter.util.BitmapUtils
+import com.example.sbsconverter.util.CalibrationInfo
+import com.example.sbsconverter.util.ExifDepthCalibrator
 import com.example.sbsconverter.util.GalleryUtils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -43,6 +45,9 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
 
     // Track whether depth params changed since last SBS generation
     private var depthDirty = false
+
+    // Auto-calibration: prevents overwriting user's manual slider adjustment
+    private var userHasAdjustedSlider = false
 
     val isModelReady: StateFlow<Boolean> = app.isModelReady
     val modelLoadProgress: StateFlow<Float> = app.modelLoadProgress
@@ -111,6 +116,10 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
     private val _saveSuccess = MutableStateFlow<Boolean?>(null)
     val saveSuccess: StateFlow<Boolean?> = _saveSuccess
 
+    // Auto-calibration result from EXIF (null = no EXIF data / not calibrated)
+    private val _calibrationInfo = MutableStateFlow<CalibrationInfo?>(null)
+    val calibrationInfo: StateFlow<CalibrationInfo?> = _calibrationInfo
+
     fun onImageSelected(uri: Uri) {
         if (app.batchProcessingState.isProcessing.value) return
         val context = getApplication<Application>()
@@ -150,6 +159,8 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         _showMeshOverlay.value = false
         _viewMode.value = ViewMode.DEPTH_COMPARE
         _normalizedDepth.value = null
+        _calibrationInfo.value = null
+        userHasAdjustedSlider = false
         cachedRawDepth = null
 
         sourceBitmap?.recycle()
@@ -187,12 +198,32 @@ class HomeViewModel(application: Application) : AndroidViewModel(application) {
         depthBacking = depthBmp
         _depthImage.value = depthBmp.asImageBitmap()
 
+        // Auto-calibrate depthScale from EXIF
+        val uri = sourceUri
+        if (uri != null) {
+            val rawRange = BitmapUtils.computeRawRange(depthMap)
+            val info = withContext(Dispatchers.IO) {
+                ExifDepthCalibrator.calibrate(getApplication(), uri, rawRange, bitmap.width)
+            }
+            _calibrationInfo.value = info
+            if (info != null && !userHasAdjustedSlider) {
+                _processingConfig.value = _processingConfig.value.copy(depthScale = info.depthScale)
+            }
+        }
+
         // Auto-generate SBS immediately after depth estimation
         generateSbs()
     }
 
     fun updateConfig(config: ProcessingConfig) {
         _processingConfig.value = config
+        userHasAdjustedSlider = true
+    }
+
+    fun resetToAutoScale() {
+        val auto = _calibrationInfo.value?.depthScale ?: return
+        _processingConfig.value = _processingConfig.value.copy(depthScale = auto)
+        userHasAdjustedSlider = false
     }
 
     fun onSliderFinished() {

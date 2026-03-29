@@ -11,6 +11,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -38,6 +39,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TooltipBox
 import androidx.compose.material3.TooltipDefaults
 import androidx.compose.material3.rememberTooltipState
@@ -116,6 +118,7 @@ fun HomeScreen(
         }
     }
 
+    val calibrationInfo by viewModel.calibrationInfo.collectAsState()
     val isAnyProcessing = isEstimatingDepth || isGeneratingSbs
 
     Scaffold(
@@ -198,6 +201,21 @@ fun HomeScreen(
                 )
             }
 
+            // EXIF calibration metadata — below image, above controls
+            if (calibrationInfo != null) {
+                val info = calibrationInfo!!
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally)
+                ) {
+                    MetadataChip("${info.lens} ${info.focalLength35mm}mm")
+                    MetadataChip("${"%.1f".format(info.focusDistanceM)}m")
+                    MetadataChip(info.sceneType)
+                }
+            }
+
             // Pinned bottom control panel
             BottomControlPanel(
                 config = processingConfig,
@@ -211,6 +229,8 @@ fun HomeScreen(
                 onBatch = onNavigateToBatch,
                 onViewStereo = { onNavigateToViewer(null) },
                 onSliderFinished = { viewModel.onSliderFinished() },
+                autoSuggestedScale = calibrationInfo?.depthScale,
+                onResetToAuto = { viewModel.resetToAutoScale(); viewModel.onSliderFinished() },
                 isModelReady = isModelReady,
                 hasDepth = depthImage != null,
                 hasSbsResult = hasSbsResult,
@@ -597,6 +617,29 @@ private fun ConvergenceOverlay(
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
+private fun MetadataChip(text: String) {
+    TooltipBox(
+        positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+        tooltip = { PlainTooltip { Text(text) } },
+        state = rememberTooltipState()
+    ) {
+        Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            modifier = Modifier.semantics { contentDescription = "Photo metadata: $text" }
+        ) {
+            Text(
+                text = text,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
 private fun BottomControlPanel(
     config: ProcessingConfig,
     onConfigChange: (ProcessingConfig) -> Unit,
@@ -605,6 +648,8 @@ private fun BottomControlPanel(
     onBatch: () -> Unit,
     onViewStereo: () -> Unit,
     onSliderFinished: () -> Unit,
+    autoSuggestedScale: Float?,
+    onResetToAuto: () -> Unit,
     isModelReady: Boolean,
     hasDepth: Boolean,
     hasSbsResult: Boolean,
@@ -646,16 +691,50 @@ private fun BottomControlPanel(
             // Primary: 3D Strength slider
             TooltipBox(
                 positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
-                tooltip = { PlainTooltip { Text("Controls 3D depth intensity") } },
+                tooltip = {
+                    PlainTooltip {
+                        Text(
+                            if (autoSuggestedScale != null && config.depthScale == autoSuggestedScale)
+                                "Auto-calibrated from photo focus distance"
+                            else "Controls 3D depth intensity"
+                        )
+                    }
+                },
                 state = rememberTooltipState()
             ) {
                 Column(modifier = Modifier.semantics { contentDescription = "3D strength slider" }) {
-                    Text("3D Strength: ${"%.2f".format(config.depthScale)}", style = MaterialTheme.typography.bodySmall)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        val isAutoActive = autoSuggestedScale != null && config.depthScale == autoSuggestedScale
+                        Text(
+                            "3D Strength: ${"%.2f".format(config.depthScale)}${if (isAutoActive) " (auto)" else ""}",
+                            style = MaterialTheme.typography.bodySmall
+                        )
+                        // Show "Reset to Auto" when auto is available but user has overridden
+                        if (autoSuggestedScale != null && config.depthScale != autoSuggestedScale) {
+                            Spacer(modifier = Modifier.weight(1f))
+                            TooltipBox(
+                                positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+                                tooltip = { PlainTooltip { Text("Reset to auto-calibrated value from EXIF") } },
+                                state = rememberTooltipState()
+                            ) {
+                                TextButton(
+                                    onClick = onResetToAuto,
+                                    enabled = !isAnyProcessing,
+                                    contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                                    modifier = Modifier
+                                        .height(24.dp)
+                                        .semantics { contentDescription = "Reset to auto 3D strength" }
+                                ) {
+                                    Text("Reset to Auto", style = MaterialTheme.typography.labelSmall)
+                                }
+                            }
+                        }
+                    }
                     Slider(
                         value = config.depthScale,
                         onValueChange = { onConfigChange(config.copy(depthScale = it)) },
                         onValueChangeFinished = onSliderFinished,
-                        valueRange = 0.01f..1f,
+                        valueRange = 0.01f..0.5f,
                         enabled = isModelReady && hasDepth && !isAnyProcessing
                     )
                 }

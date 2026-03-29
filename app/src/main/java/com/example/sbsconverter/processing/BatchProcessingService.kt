@@ -18,6 +18,7 @@ import com.example.sbsconverter.model.Arrangement
 import com.example.sbsconverter.model.BatchItemStatus
 import com.example.sbsconverter.model.ProcessingConfig
 import com.example.sbsconverter.util.BitmapUtils
+import com.example.sbsconverter.util.ExifDepthCalibrator
 import com.example.sbsconverter.util.GalleryUtils
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -158,7 +159,12 @@ class BatchProcessingService : Service() {
                         estimator.estimateDepth(tensor)
                     }
 
-                    val config = ProcessingConfig()
+                    // Auto-calibrate depthScale from EXIF per image
+                    val rawRange = BitmapUtils.computeRawRange(rawDepth)
+                    val calibration = ExifDepthCalibrator.calibrate(
+                        this@BatchProcessingService, item.uri, rawRange, bitmap.width
+                    )
+                    val config = ProcessingConfig(depthScale = calibration?.depthScale ?: 0.1f)
 
                     val result = withContext(Dispatchers.Default) {
                         processor.processImage(bitmap, rawDepth, config)

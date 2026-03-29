@@ -308,6 +308,20 @@ object BitmapUtils {
         return argb
     }
 
+    /**
+     * Compute the raw depth range (max - min) from a raw depth map.
+     * Uses the same 0.001f floor as ImageProcessor.processImage() for consistency.
+     */
+    fun computeRawRange(rawDepthMap: FloatArray): Float {
+        var min = Float.MAX_VALUE
+        var max = Float.MIN_VALUE
+        for (v in rawDepthMap) {
+            if (v < min) min = v
+            if (v > max) max = v
+        }
+        return (max - min).coerceAtLeast(0.001f)
+    }
+
     fun loadBitmapFromAsset(context: Context, assetPath: String): Bitmap? {
         return try {
             context.assets.open(assetPath).use { BitmapFactory.decodeStream(it) }
