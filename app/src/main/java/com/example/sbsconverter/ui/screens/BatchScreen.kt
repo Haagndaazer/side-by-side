@@ -382,7 +382,7 @@ private fun BatchItemRow(
     val context = LocalContext.current
     var thumbnail by remember(item.uri) { mutableStateOf<ImageBitmap?>(null) }
     LaunchedEffect(item.uri) {
-        val bmp = withContext(Dispatchers.IO) { BitmapUtils.loadThumbnail(context, item.uri, 128) }
+        val bmp = withContext(Dispatchers.IO) { BitmapUtils.loadBitmapFromUri(context, item.uri) }
         if (bmp != null) thumbnail = bmp.asImageBitmap()
     }
 
@@ -402,7 +402,7 @@ private fun BatchItemRow(
                     contentAlignment = Alignment.Center
                 ) {
                     thumbnail?.let {
-                        Image(bitmap = it, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                        Image(bitmap = it, contentDescription = null, contentScale = ContentScale.Crop, filterQuality = androidx.compose.ui.graphics.FilterQuality.Low, modifier = Modifier.fillMaxSize())
                     }
                 }
                 Spacer(Modifier.width(12.dp))
@@ -433,11 +433,11 @@ private fun BatchPairItemRow(
     var leftThumb by remember(pair.leftUri) { mutableStateOf<ImageBitmap?>(null) }
     var rightThumb by remember(pair.rightUri) { mutableStateOf<ImageBitmap?>(null) }
     LaunchedEffect(pair.leftUri) {
-        val bmp = withContext(Dispatchers.IO) { BitmapUtils.loadThumbnail(context, pair.leftUri, 96) }
+        val bmp = withContext(Dispatchers.IO) { BitmapUtils.loadBitmapFromUri(context, pair.leftUri) }
         if (bmp != null) leftThumb = bmp.asImageBitmap()
     }
     LaunchedEffect(pair.rightUri) {
-        val bmp = withContext(Dispatchers.IO) { BitmapUtils.loadThumbnail(context, pair.rightUri, 96) }
+        val bmp = withContext(Dispatchers.IO) { BitmapUtils.loadBitmapFromUri(context, pair.rightUri) }
         if (bmp != null) rightThumb = bmp.asImageBitmap()
     }
 
@@ -458,7 +458,7 @@ private fun BatchPairItemRow(
                     contentAlignment = Alignment.Center
                 ) {
                     leftThumb?.let {
-                        Image(bitmap = it, contentDescription = "Left eye", contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                        Image(bitmap = it, contentDescription = "Left eye", contentScale = ContentScale.Crop, filterQuality = androidx.compose.ui.graphics.FilterQuality.Low, modifier = Modifier.fillMaxSize())
                     }
                 }
                 Text("+", style = MaterialTheme.typography.labelMedium,
@@ -469,7 +469,7 @@ private fun BatchPairItemRow(
                     contentAlignment = Alignment.Center
                 ) {
                     rightThumb?.let {
-                        Image(bitmap = it, contentDescription = "Right eye", contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+                        Image(bitmap = it, contentDescription = "Right eye", contentScale = ContentScale.Crop, filterQuality = androidx.compose.ui.graphics.FilterQuality.Low, modifier = Modifier.fillMaxSize())
                     }
                 }
 

@@ -540,7 +540,7 @@ private fun GalleryThumbnail(
 
     LaunchedEffect(uri) {
         val bmp = withContext(Dispatchers.IO) {
-            val fullBmp = BitmapUtils.loadThumbnail(context, uri, 512) ?: return@withContext null
+            val fullBmp = BitmapUtils.loadBitmapFromUri(context, uri) ?: return@withContext null
             val halfW = fullBmp.width / 2
             if (halfW > 0) {
                 val cropped = Bitmap.createBitmap(fullBmp, 0, 0, halfW, fullBmp.height)
@@ -573,6 +573,7 @@ private fun GalleryThumbnail(
                 bitmap = img,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
+                filterQuality = androidx.compose.ui.graphics.FilterQuality.Low,
                 modifier = Modifier.fillMaxSize()
             )
         }
