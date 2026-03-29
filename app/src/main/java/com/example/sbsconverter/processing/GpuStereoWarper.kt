@@ -13,6 +13,7 @@ import android.media.ImageReader
 import android.os.Build
 import android.util.Log
 import androidx.annotation.RequiresApi
+import com.example.sbsconverter.util.BitmapUtils
 import java.io.Closeable
 
 @RequiresApi(Build.VERSION_CODES.TIRAMISU)
@@ -21,7 +22,7 @@ class GpuStereoWarper : Closeable {
     companion object {
         private const val TAG = "GpuStereoWarper"
 
-        private const val WARP_SHADER = """
+        private val WARP_SHADER = """
             uniform shader sourceImage;
             uniform shader depthMap;
             uniform float2 imageSize;
@@ -31,14 +32,7 @@ class GpuStereoWarper : Closeable {
             uniform float direction;
             uniform float fadeWidth;
 
-            // Decode 24-bit packed depth from ARGB_8888 texel.
-            // floor(x+0.5) rounds to counter half-precision loss from eval() returning half4.
-            float decodeDepth(half4 texel) {
-                float r = floor(float(texel.r) * 255.0 + 0.5);
-                float g = floor(float(texel.g) * 255.0 + 0.5);
-                float b = floor(float(texel.b) * 255.0 + 0.5);
-                return (r * 65536.0 + g * 256.0 + b) / 16777215.0;
-            }
+            ${BitmapUtils.AGSL_DECODE_DEPTH}
 
             // Manual bilinear interpolation of packed depth.
             // Hardware bilinear would interpolate raw bytes, not decoded depth.
@@ -141,7 +135,7 @@ class GpuStereoWarper : Closeable {
 
         // Depth map — 24-bit packed encoding (~16.7M depth levels)
         // NEAREST required: shader decodes each texel before manual bilinear interpolation
-        val depthBitmap = floatArrayToPackedBitmap(depthMap, depthSize, depthSize)
+        val depthBitmap = BitmapUtils.floatArrayToPackedBitmap(depthMap, depthSize, depthSize)
         val depthShader = BitmapShader(depthBitmap, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
         depthShader.setFilterMode(BitmapShader.FILTER_MODE_NEAREST)
         s.setInputBuffer("depthMap", depthShader)
@@ -188,26 +182,6 @@ class GpuStereoWarper : Closeable {
         renderer.destroy()
 
         return softBitmap
-    }
-
-    /**
-     * Encode depth FloatArray as 24-bit packed ARGB_8888 bitmap.
-     * Each float [0,1] is scaled to a 24-bit integer and distributed across R(high), G(mid), B(low).
-     * Gives ~16.7M depth levels vs ~2048 with F16, and uses half the memory (4 vs 8 bytes/pixel).
-     * The AGSL shader decodes via decodeDepth() and does manual bilinear interpolation.
-     */
-    private fun floatArrayToPackedBitmap(data: FloatArray, width: Int, height: Int): Bitmap {
-        val pixels = IntArray(data.size)
-        for (i in data.indices) {
-            val v = (data[i].coerceIn(0f, 1f) * 16777215f + 0.5f).toInt()
-            val r = (v shr 16) and 0xFF
-            val g = (v shr 8) and 0xFF
-            val b = v and 0xFF
-            pixels[i] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
-        }
-        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        bitmap.setPixels(pixels, 0, width, 0, 0, width, height)
-        return bitmap
     }
 
     override fun close() {

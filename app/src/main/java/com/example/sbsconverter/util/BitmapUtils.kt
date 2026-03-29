@@ -322,6 +322,70 @@ object BitmapUtils {
         return (max - min).coerceAtLeast(0.001f)
     }
 
+    /**
+     * Encode depth FloatArray as 24-bit packed ARGB_8888 bitmap.
+     * Each float [0,1] is scaled to a 24-bit integer and distributed across R(high), G(mid), B(low).
+     * Gives ~16.7M depth levels. Used by GpuBilateralFilter and GpuStereoWarper.
+     */
+    fun floatArrayToPackedBitmap(data: FloatArray, width: Int, height: Int): Bitmap {
+        val pixels = IntArray(data.size)
+        for (i in data.indices) {
+            val v = (data[i].coerceIn(0f, 1f) * 16777215f + 0.5f).toInt()
+            val r = (v shr 16) and 0xFF
+            val g = (v shr 8) and 0xFF
+            val b = v and 0xFF
+            pixels[i] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+        }
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        bitmap.setPixels(pixels, 0, width, 0, 0, width, height)
+        return bitmap
+    }
+
+    /**
+     * Decode a 24-bit packed ARGB_8888 bitmap back to FloatArray.
+     * Inverse of [floatArrayToPackedBitmap].
+     */
+    fun packedBitmapToFloatArray(bitmap: Bitmap): FloatArray {
+        val w = bitmap.width
+        val h = bitmap.height
+        val pixels = IntArray(w * h)
+        bitmap.getPixels(pixels, 0, w, 0, 0, w, h)
+        val result = FloatArray(pixels.size)
+        for (i in pixels.indices) {
+            val r = (pixels[i] shr 16) and 0xFF
+            val g = (pixels[i] shr 8) and 0xFF
+            val b = pixels[i] and 0xFF
+            result[i] = (r * 65536 + g * 256 + b) / 16777215f
+        }
+        return result
+    }
+
+    /**
+     * AGSL shader snippet for decoding 24-bit packed depth from ARGB_8888 texel.
+     * floor(x+0.5) rounds to counter half-precision loss from eval() returning half4.
+     */
+    const val AGSL_DECODE_DEPTH = """
+        float decodeDepth(half4 texel) {
+            float r = floor(float(texel.r) * 255.0 + 0.5);
+            float g = floor(float(texel.g) * 255.0 + 0.5);
+            float b = floor(float(texel.b) * 255.0 + 0.5);
+            return (r * 65536.0 + g * 256.0 + b) / 16777215.0;
+        }
+    """
+
+    /**
+     * AGSL shader snippet for encoding a float depth [0,1] back to 24-bit packed ARGB_8888.
+     */
+    const val AGSL_ENCODE_DEPTH = """
+        half4 encodeDepth(float depth) {
+            float v = clamp(depth, 0.0, 1.0) * 16777215.0;
+            float r = floor(v / 65536.0);
+            float g = floor((v - r * 65536.0) / 256.0);
+            float b = v - r * 65536.0 - g * 256.0;
+            return half4(half(r / 255.0), half(g / 255.0), half(b / 255.0), 1.0);
+        }
+    """
+
     fun loadBitmapFromAsset(context: Context, assetPath: String): Bitmap? {
         return try {
             context.assets.open(assetPath).use { BitmapFactory.decodeStream(it) }

@@ -1,6 +1,8 @@
 package com.example.sbsconverter.processing
 
 import android.graphics.Bitmap
+import android.os.Build
+import android.util.Log
 import com.example.sbsconverter.model.ProcessingConfig
 import com.example.sbsconverter.model.SbsResult
 import com.example.sbsconverter.util.BitmapUtils
@@ -9,7 +11,17 @@ import kotlinx.coroutines.withContext
 
 class ImageProcessor {
 
+    companion object {
+        private const val TAG = "ImageProcessor"
+    }
+
     private val warper = SbsWarper()
+    private val bilateralFilter: GpuBilateralFilter? by lazy {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            val filter = GpuBilateralFilter()
+            if (filter.gpuAvailable) filter else { filter.close(); null }
+        } else null
+    }
 
     suspend fun processImage(
         sourceBitmap: Bitmap,
@@ -30,10 +42,20 @@ class ImageProcessor {
         // Linear normalize preserves depth ratios (no equalization/gamma)
         val normalized = BitmapUtils.normalizeDepthMap(rawDepthMap)
 
-        val blurred = BitmapUtils.blurDepthMap(
-            normalized, depthSize, depthSize, config.depthBlurKernel
-        )
+        val smoothed = if (config.depthBlurKernel <= 1) {
+            normalized
+        } else if (bilateralFilter != null) {
+            Log.d(TAG, "Using GPU bilateral filter (spatialSigma=${config.bilateralSpatialSigma})")
+            bilateralFilter!!.filter(
+                normalized, depthSize, depthSize,
+                config.bilateralSpatialSigma,
+                ProcessingConfig.BILATERAL_RANGE_SIGMA
+            )
+        } else {
+            Log.d(TAG, "GPU bilateral unavailable, falling back to box blur")
+            BitmapUtils.blurDepthMap(normalized, depthSize, depthSize, config.depthBlurKernel)
+        }
 
-        warper.generateSbsPair(sourceBitmap, blurred, config, rawRange)
+        warper.generateSbsPair(sourceBitmap, smoothed, config, rawRange)
     }
 }

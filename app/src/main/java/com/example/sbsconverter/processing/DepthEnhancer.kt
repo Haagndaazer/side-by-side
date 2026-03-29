@@ -131,7 +131,7 @@ class DepthEnhancer : Closeable {
             val gpu = getOrCreateGpuFilter(width, height)
             if (gpu != null && gpu.gpuAvailable) {
                 return try {
-                    gpu.filter(depth, spatialSigma, depthSigma)
+                    gpu.filter(depth, width, height, spatialSigma, depthSigma)
                 } catch (e: Exception) {
                     Log.w("DepthEnhancer", "GPU bilateral failed, falling back to CPU: ${e.message}")
                     bilateralFilterCpu(depth, width, height, spatialSigma, depthSigma)
@@ -147,7 +147,7 @@ class DepthEnhancer : Closeable {
         if (!gpuInitialized) {
             gpuInitialized = true
             gpuFilter = try {
-                GpuBilateralFilter(width, height)
+                GpuBilateralFilter()
             } catch (e: Exception) {
                 Log.w("DepthEnhancer", "Failed to create GPU filter: ${e.message}")
                 null
