@@ -23,6 +23,8 @@ class SbsWarper : Closeable {
 
     private var gpuWarper: GpuStereoWarper? = null
     private var gpuInitialized = false
+    private var holeFiller: GpuHoleFiller? = null
+    private var holeFillerInitialized = false
 
     fun generateSbsPair(
         sourceBitmap: Bitmap,
@@ -52,6 +54,7 @@ class SbsWarper : Closeable {
 
     /**
      * Warp a bitmap into left and right eye views using GPU (preferred) or CPU fallback.
+     * Applies ghost detection (depth discontinuity → alpha=0) and hole filling.
      */
     private fun warpPair(
         bitmap: Bitmap,
@@ -59,16 +62,40 @@ class SbsWarper : Closeable {
         config: ProcessingConfig,
         maxDisparity: Float
     ): Pair<Bitmap, Bitmap> {
+        // Symmetric warping: each eye displaces by half, total parallax unchanged.
+        // Halves max hole size and distributes artifacts symmetrically across eyes.
+        val halfDisparity = maxDisparity / 2f
+
         val gpuResult = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             val gpu = getOrCreateGpuWarper()
+            val filler = getOrCreateHoleFiller()
             if (gpu != null && gpu.gpuAvailable) {
                 try {
-                    Pair(
-                        gpu.warpEye(bitmap, processedDepth,
-                            isLeftEye = true, maxDisparity, config.convergencePoint, EDGE_FADE_PERCENT),
-                        gpu.warpEye(bitmap, processedDepth,
-                            isLeftEye = false, maxDisparity, config.convergencePoint, EDGE_FADE_PERCENT)
-                    )
+                    // Ghost threshold: flag pixels where source-vs-output depth mismatch
+                    // exceeds ~2px worth of displacement. Floor clamp prevents over-marking.
+                    val ghostThreshold = if (halfDisparity > 0f)
+                        (2f / halfDisparity).coerceAtLeast(0.005f)
+                    else 0f
+
+                    var leftEye = gpu.warpEye(bitmap, processedDepth,
+                        isLeftEye = true, halfDisparity, config.convergencePoint,
+                        EDGE_FADE_PERCENT, ghostThreshold)
+                    var rightEye = gpu.warpEye(bitmap, processedDepth,
+                        isLeftEye = false, halfDisparity, config.convergencePoint,
+                        EDGE_FADE_PERCENT, ghostThreshold)
+
+                    // Fill ghost-marked holes with background content
+                    if (filler != null && filler.gpuAvailable && ghostThreshold > 0f) {
+                        val filledLeft = filler.fill(leftEye, isLeftEye = true)
+                        leftEye.recycle()
+                        leftEye = filledLeft
+
+                        val filledRight = filler.fill(rightEye, isLeftEye = false)
+                        rightEye.recycle()
+                        rightEye = filledRight
+                    }
+
+                    Pair(leftEye, rightEye)
                 } catch (e: Exception) {
                     Log.w(TAG, "GPU warp failed, falling back to CPU: ${e.message}")
                     null
@@ -77,8 +104,8 @@ class SbsWarper : Closeable {
         } else null
 
         return gpuResult ?: Pair(
-            warpEyeCpu(bitmap, processedDepth, true, config, maxDisparity),
-            warpEyeCpu(bitmap, processedDepth, false, config, maxDisparity)
+            warpEyeCpu(bitmap, processedDepth, true, config, halfDisparity),
+            warpEyeCpu(bitmap, processedDepth, false, config, halfDisparity)
         )
     }
 
@@ -155,6 +182,20 @@ class SbsWarper : Closeable {
             }
         }
         return gpuWarper
+    }
+
+    @androidx.annotation.RequiresApi(Build.VERSION_CODES.TIRAMISU)
+    private fun getOrCreateHoleFiller(): GpuHoleFiller? {
+        if (!holeFillerInitialized) {
+            holeFillerInitialized = true
+            holeFiller = try {
+                GpuHoleFiller()
+            } catch (e: Exception) {
+                Log.w("SbsWarper", "Failed to create hole filler: ${e.message}")
+                null
+            }
+        }
+        return holeFiller
     }
 
     /** CPU mesh warp fallback for API < 33 or GPU failure */
@@ -252,5 +293,7 @@ class SbsWarper : Closeable {
     override fun close() {
         gpuWarper?.close()
         gpuWarper = null
+        holeFiller?.close()
+        holeFiller = null
     }
 }

@@ -31,6 +31,7 @@ class GpuStereoWarper : Closeable {
             uniform float convergencePoint;
             uniform float direction;
             uniform float fadeWidth;
+            uniform float ghostThreshold;
 
             ${BitmapUtils.AGSL_DECODE_DEPTH}
 
@@ -76,6 +77,16 @@ class GpuStereoWarper : Closeable {
                     fragCoord.y
                 );
 
+                // Depth discontinuity detection: compare depth at output position
+                // vs depth at the backward-mapped source position. If the source is
+                // significantly closer (foreground leaking into background), this is
+                // a ghost pixel — mark as hole (alpha=0) for the hole filler.
+                float2 srcDepthCoord = (srcCoord / imageSize) * (depthSize - 1.0);
+                float srcDepth = sampleDepth(srcDepthCoord);
+                if (srcDepth - depth > ghostThreshold) {
+                    return half4(0.0, 0.0, 0.0, 0.0);
+                }
+
                 return sourceImage.eval(srcCoord);
             }
         """
@@ -104,7 +115,8 @@ class GpuStereoWarper : Closeable {
      * @param maxDisparity      Maximum pixel displacement (scene-aware, includes rawRange)
      * @param convergencePoint  Depth value at screen plane
      * @param edgeFadePercent   Fraction of width for edge fade ramp
-     * @return Warped eye bitmap at source dimensions
+     * @param ghostThreshold    Depth difference threshold for ghost detection (0 = disabled)
+     * @return Warped eye bitmap at source dimensions (may contain alpha=0 ghost holes)
      */
     fun warpEye(
         sourceBitmap: Bitmap,
@@ -112,7 +124,8 @@ class GpuStereoWarper : Closeable {
         isLeftEye: Boolean,
         maxDisparity: Float,
         convergencePoint: Float,
-        edgeFadePercent: Float
+        edgeFadePercent: Float,
+        ghostThreshold: Float = 0f
     ): Bitmap {
         if (!gpuAvailable) throw IllegalStateException("GPU not available")
 
@@ -127,6 +140,7 @@ class GpuStereoWarper : Closeable {
         s.setFloatUniform("convergencePoint", convergencePoint)
         s.setFloatUniform("direction", if (isLeftEye) -1f else 1f)
         s.setFloatUniform("fadeWidth", w * edgeFadePercent)
+        s.setFloatUniform("ghostThreshold", ghostThreshold)
 
         // Source image — LINEAR for smooth color sampling during backward warp
         val sourceShader = BitmapShader(sourceBitmap, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)

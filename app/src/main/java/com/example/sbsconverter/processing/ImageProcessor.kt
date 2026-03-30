@@ -8,6 +8,7 @@ import com.example.sbsconverter.model.SbsResult
 import com.example.sbsconverter.util.BitmapUtils
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlin.math.ceil
 
 class ImageProcessor {
 
@@ -16,10 +17,10 @@ class ImageProcessor {
     }
 
     private val warper = SbsWarper()
-    private val bilateralFilter: GpuBilateralFilter? by lazy {
+    private val depthDilator: GpuDepthDilator? by lazy {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            val filter = GpuBilateralFilter()
-            if (filter.gpuAvailable) filter else { filter.close(); null }
+            val dilator = GpuDepthDilator()
+            if (dilator.gpuAvailable) dilator else { dilator.close(); null }
         } else null
     }
 
@@ -42,20 +43,18 @@ class ImageProcessor {
         // Linear normalize preserves depth ratios (no equalization/gamma)
         val normalized = BitmapUtils.normalizeDepthMap(rawDepthMap)
 
-        val smoothed = if (config.depthBlurKernel <= 1) {
-            normalized
-        } else if (bilateralFilter != null) {
-            Log.d(TAG, "Using GPU bilateral filter (spatialSigma=${config.bilateralSpatialSigma})")
-            bilateralFilter!!.filter(
-                normalized, depthSize, depthSize,
-                config.bilateralSpatialSigma,
-                ProcessingConfig.BILATERAL_RANGE_SIGMA
-            )
+        // Foreground depth dilation: expand close-object depth outward to prevent
+        // ghost gaps during stereo warp. Radius scales with 3D strength.
+        val processedDepth = if (depthDilator != null) {
+            val maxDisparity = config.depthScale / 100f * sourceBitmap.width / 2f * rawRange
+            val dilationRadius = ceil(maxDisparity / sourceBitmap.width * depthSize * 0.5f)
+                .coerceIn(2f, 5f)
+            Log.d(TAG, "Depth dilation: radius=$dilationRadius (maxDisparity=$maxDisparity)")
+            depthDilator!!.filter(normalized, depthSize, depthSize, dilationRadius)
         } else {
-            Log.d(TAG, "GPU bilateral unavailable, falling back to box blur")
-            BitmapUtils.blurDepthMap(normalized, depthSize, depthSize, config.depthBlurKernel)
+            normalized
         }
 
-        warper.generateSbsPair(sourceBitmap, smoothed, config, rawRange)
+        warper.generateSbsPair(sourceBitmap, processedDepth, config, rawRange)
     }
 }
