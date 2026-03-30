@@ -70,12 +70,14 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import android.hardware.display.DisplayManager
+import android.util.Log
 import android.view.Display
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.height
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.sbsconverter.processing.GainmapApplicator
 import com.example.sbsconverter.ui.components.StereoViewer
 import com.example.sbsconverter.ui.presentations.GlassesPresentation
 import com.example.sbsconverter.util.BitmapUtils
@@ -265,6 +267,8 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application) 
 
     private var glassesPresentation: GlassesPresentation? = null
     private var displayListener: DisplayManager.DisplayListener? = null
+    private var isGlassesDisplayHdr = false
+    private var currentGlassesBitmap: Bitmap? = null
 
     fun setupDisplayDetection(context: android.content.Context) {
         val dm = context.getSystemService(android.content.Context.DISPLAY_SERVICE) as DisplayManager
@@ -290,6 +294,38 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    @Suppress("DEPRECATION")
+    private fun checkDisplayHdr(display: Display): Boolean {
+        val hdrCaps = display.hdrCapabilities
+        val supported = hdrCaps?.supportedHdrTypes?.isNotEmpty() == true
+        val maxLuminance = hdrCaps?.desiredMaxLuminance ?: 0f
+        Log.d("ViewerViewModel", "External display HDR: supported=$supported, " +
+                "types=${hdrCaps?.supportedHdrTypes?.contentToString()}, maxLuminance=$maxLuminance")
+        return supported
+    }
+
+    /**
+     * Get the image to send to glasses — applies software gainmap for SDR displays.
+     * Must be called from a coroutine (runs gainmap application on Default dispatcher).
+     */
+    private suspend fun getGlassesImage(): ImageBitmap? {
+        val bitmap = currentBitmap ?: return _sbsImage.value
+        if (isGlassesDisplayHdr) return _sbsImage.value
+
+        // SDR display: apply gainmap in software if present
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE && bitmap.hasGainmap()) {
+            val enhanced = withContext(Dispatchers.Default) {
+                GainmapApplicator.applyToSdr(bitmap)
+            }
+            // Recycle previous glasses bitmap if any
+            currentGlassesBitmap?.recycle()
+            currentGlassesBitmap = enhanced
+            return enhanced.asImageBitmap()
+        }
+
+        return _sbsImage.value
+    }
+
     fun toggleGlasses(context: android.content.Context, swapEyes: Boolean) {
         if (glassesPresentation != null) {
             dismissGlasses()
@@ -298,22 +334,30 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application) 
 
         val dm = context.getSystemService(android.content.Context.DISPLAY_SERVICE) as DisplayManager
         val externalDisplay = dm.displays.firstOrNull { it.displayId != Display.DEFAULT_DISPLAY } ?: return
-        val image = _sbsImage.value ?: return
 
-        glassesPresentation = GlassesPresentation(context, externalDisplay) {
-            _isGlassesActive.value = false
-            glassesPresentation = null
-        }.apply {
-            updateImage(image)
-            updateSwapEyes(swapEyes)
-            show()
+        isGlassesDisplayHdr = checkDisplayHdr(externalDisplay)
+
+        viewModelScope.launch {
+            val image = getGlassesImage() ?: return@launch
+
+            glassesPresentation = GlassesPresentation(context, externalDisplay, isGlassesDisplayHdr) {
+                _isGlassesActive.value = false
+                glassesPresentation = null
+            }.apply {
+                updateImage(image)
+                updateSwapEyes(swapEyes)
+                show()
+            }
+            _isGlassesActive.value = true
         }
-        _isGlassesActive.value = true
     }
 
-    fun updateGlassesContent(image: ImageBitmap, swapEyes: Boolean) {
-        glassesPresentation?.updateImage(image)
-        glassesPresentation?.updateSwapEyes(swapEyes)
+    fun updateGlassesContent(swapEyes: Boolean) {
+        viewModelScope.launch {
+            val image = getGlassesImage() ?: return@launch
+            glassesPresentation?.updateImage(image)
+            glassesPresentation?.updateSwapEyes(swapEyes)
+        }
     }
 
     fun updateGlassesTransform(scale: Float, offsetX: Float, offsetY: Float) {
@@ -324,6 +368,8 @@ class ViewerViewModel(application: Application) : AndroidViewModel(application) 
         glassesPresentation?.dismiss()
         glassesPresentation = null
         _isGlassesActive.value = false
+        currentGlassesBitmap?.recycle()
+        currentGlassesBitmap = null
     }
 
     override fun onCleared() {
@@ -633,7 +679,7 @@ private fun SingleImageView(
     // Keep glasses presentation in sync with current image and settings
     LaunchedEffect(sbsImage, swapEyes) {
         if (isGlassesActive && sbsImage != null) {
-            viewModel.updateGlassesContent(sbsImage!!, swapEyes)
+            viewModel.updateGlassesContent(swapEyes)
         }
     }
 

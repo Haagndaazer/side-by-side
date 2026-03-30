@@ -36,6 +36,7 @@ import com.example.sbsconverter.ui.theme.SBSConverterTheme
 class GlassesPresentation(
     context: Context,
     display: Display,
+    private val isDisplayHdr: Boolean = false,
     private val onDismissed: () -> Unit = {}
 ) : Presentation(context, display) {
 
@@ -49,7 +50,7 @@ class GlassesPresentation(
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        if (isDisplayHdr && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             window?.colorMode = ActivityInfo.COLOR_MODE_HDR
         }
         setOnDismissListener { onDismissed() }
