@@ -43,14 +43,10 @@ class ImageProcessor {
         // Linear normalize preserves depth ratios (no equalization/gamma)
         val normalized = BitmapUtils.normalizeDepthMap(rawDepthMap)
 
-        // Foreground depth dilation: expand close-object depth outward to prevent
-        // ghost gaps during stereo warp. Radius scales with 3D strength.
+        // Foreground depth dilation: fixed 1px radius for minimal edge coverage
         val processedDepth = if (depthDilator != null) {
-            val maxDisparity = config.depthScale / 100f * sourceBitmap.width / 2f * rawRange
-            val dilationRadius = ceil(maxDisparity / sourceBitmap.width * depthSize * 0.5f)
-                .coerceIn(2f, 5f)
-            Log.d(TAG, "Depth dilation: radius=$dilationRadius (maxDisparity=$maxDisparity)")
-            depthDilator!!.filter(normalized, depthSize, depthSize, dilationRadius)
+            Log.d(TAG, "Depth dilation: radius=1.0 (fixed)")
+            depthDilator!!.filter(normalized, depthSize, depthSize, 1f)
         } else {
             normalized
         }
