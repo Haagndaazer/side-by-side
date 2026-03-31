@@ -38,6 +38,49 @@ class GpuDepthDilator : Closeable {
     companion object {
         private const val TAG = "GpuDepthDilator"
 
+        /**
+         * Single-sided hole-filling dilation shader (Disney pipeline Passes 2-3).
+         * For each alpha=0 hole pixel, scans in the background direction for the
+         * nearest valid depth, filling disocclusion holes with background depth.
+         * Iterated 3x with ping-pong bitmaps (width=7 per iteration, ~21px total).
+         */
+        private val HOLE_FILL_SHADER = """
+            uniform shader inputImage;
+            uniform float2 iResolution;
+            uniform float scanDirection;
+            const int DILATION_WIDTH = 7;
+
+            ${BitmapUtils.AGSL_DECODE_DEPTH}
+            ${BitmapUtils.AGSL_ENCODE_DEPTH}
+
+            half4 main(float2 fragCoord) {
+                half4 center = inputImage.eval(fragCoord);
+                if (center.a > 0.5) return center;
+
+                // Scan background direction for nearest valid depth
+                for (int i = 1; i <= DILATION_WIDTH; i++) {
+                    float2 sc = float2(
+                        clamp(fragCoord.x + float(i) * scanDirection, 0.0, iResolution.x - 1.0),
+                        fragCoord.y
+                    );
+                    half4 neighbor = inputImage.eval(sc);
+                    if (neighbor.a > 0.5) return encodeDepth(decodeDepth(neighbor));
+                }
+
+                // Fallback: scan opposite direction
+                for (int i = 1; i <= DILATION_WIDTH; i++) {
+                    float2 sc = float2(
+                        clamp(fragCoord.x - float(i) * scanDirection, 0.0, iResolution.x - 1.0),
+                        fragCoord.y
+                    );
+                    half4 neighbor = inputImage.eval(sc);
+                    if (neighbor.a > 0.5) return encodeDepth(decodeDepth(neighbor));
+                }
+
+                return half4(0.0, 0.0, 0.0, 0.0);
+            }
+        """
+
         private val HORIZONTAL_SHADER = """
             uniform shader inputImage;
             uniform float2 iResolution;
@@ -103,6 +146,7 @@ class GpuDepthDilator : Closeable {
 
     private var horizontalShader: RuntimeShader? = null
     private var verticalShader: RuntimeShader? = null
+    private var holeFillShader: RuntimeShader? = null
     var gpuAvailable = false
         private set
 
@@ -110,11 +154,59 @@ class GpuDepthDilator : Closeable {
         try {
             horizontalShader = RuntimeShader(HORIZONTAL_SHADER)
             verticalShader = RuntimeShader(VERTICAL_SHADER)
+            holeFillShader = RuntimeShader(HOLE_FILL_SHADER)
             gpuAvailable = true
         } catch (e: Exception) {
             Log.w(TAG, "AGSL shader compilation failed: ${e.message}")
             gpuAvailable = false
         }
+    }
+
+    /**
+     * Fill alpha=0 holes in a warped depth bitmap using directional dilation.
+     * Iterates the hole-fill shader [iterations] times with ping-pong bitmaps.
+     *
+     * @param warpedDepthBitmap  24-bit packed depth bitmap with alpha=0 holes
+     * @param isLeftEye          Determines scan direction (left eye scans right, right eye scans left)
+     * @param iterations         Number of dilation passes (each fills up to 7px)
+     * @return Dense depth bitmap with holes filled by background depth values
+     */
+    fun fillHoles(
+        warpedDepthBitmap: Bitmap,
+        isLeftEye: Boolean,
+        iterations: Int = 3
+    ): Bitmap {
+        if (!gpuAvailable) throw IllegalStateException("GPU not available")
+
+        val w = warpedDepthBitmap.width
+        val h = warpedDepthBitmap.height
+        val t0 = System.currentTimeMillis()
+
+        val s = holeFillShader!!
+        s.setFloatUniform("iResolution", w.toFloat(), h.toFloat())
+        // Left eye: disocclusions are RIGHT of foreground -> scan right (+1)
+        // Right eye: disocclusions are LEFT of foreground -> scan left (-1)
+        s.setFloatUniform("scanDirection", if (isLeftEye) 1f else -1f)
+
+        var current = warpedDepthBitmap
+        var ownsCurrentBitmap = false
+
+        for (iter in 0 until iterations) {
+            val inputShader = BitmapShader(current, Shader.TileMode.CLAMP, Shader.TileMode.CLAMP)
+            inputShader.setFilterMode(BitmapShader.FILTER_MODE_NEAREST)
+            s.setInputBuffer("inputImage", inputShader)
+
+            val output = renderShader(s, w, h)
+
+            if (ownsCurrentBitmap) current.recycle()
+            current = output
+            ownsCurrentBitmap = true
+        }
+
+        val t1 = System.currentTimeMillis()
+        Log.d(TAG, "Depth hole fill (${if (isLeftEye) "left" else "right"}, ${iterations}x): ${t1 - t0}ms")
+
+        return current
     }
 
     /**
@@ -215,5 +307,6 @@ class GpuDepthDilator : Closeable {
     override fun close() {
         horizontalShader = null
         verticalShader = null
+        holeFillShader = null
     }
 }

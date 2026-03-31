@@ -23,8 +23,12 @@ class SbsWarper : Closeable {
 
     private var gpuWarper: GpuStereoWarper? = null
     private var gpuInitialized = false
-    private var holeFiller: GpuHoleFiller? = null
-    private var holeFillerInitialized = false
+    private var depthWarper: GpuDepthWarper? = null
+    private var depthWarperInitialized = false
+    private var depthDilator: GpuDepthDilator? = null
+    private var depthDilatorInitialized = false
+    private var depthGuidedFiller: GpuDepthGuidedFiller? = null
+    private var depthGuidedFillerInitialized = false
 
     fun generateSbsPair(
         sourceBitmap: Bitmap,
@@ -53,8 +57,12 @@ class SbsWarper : Closeable {
     }
 
     /**
-     * Warp a bitmap into left and right eye views using GPU (preferred) or CPU fallback.
-     * Applies ghost detection (depth discontinuity → alpha=0) and hole filling.
+     * Warp a bitmap into left and right eye views using the Disney-inspired pipeline:
+     *   Pass 1: Depth self-warp (target-view depth with holes)
+     *   Pass 2-3: Directional depth dilation (dense target-view depth)
+     *   Pass 4: Disparity-aware warp with target depth validation
+     *   Pass 5: Depth-guided hole fill
+     * Falls back to CPU mesh warp if GPU is unavailable.
      */
     private fun warpPair(
         bitmap: Bitmap,
@@ -62,42 +70,22 @@ class SbsWarper : Closeable {
         config: ProcessingConfig,
         maxDisparity: Float
     ): Pair<Bitmap, Bitmap> {
-        // Symmetric warping: each eye displaces by half, total parallax unchanged.
-        // Halves max hole size and distributes artifacts symmetrically across eyes.
         val halfDisparity = maxDisparity / 2f
 
         val gpuResult = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             val gpu = getOrCreateGpuWarper()
-            val filler = getOrCreateHoleFiller()
-            if (gpu != null && gpu.gpuAvailable) {
+            val dw = getOrCreateDepthWarper()
+            val dd = getOrCreateDepthDilator()
+            val filler = getOrCreateDepthGuidedFiller()
+
+            if (gpu != null && gpu.gpuAvailable &&
+                dw != null && dw.gpuAvailable &&
+                dd != null && dd.gpuAvailable) {
                 try {
-                    // Ghost threshold: flag pixels where source-vs-output depth mismatch
-                    // exceeds ~2px worth of displacement. Floor clamp prevents over-marking.
-                    val ghostThreshold = if (halfDisparity > 0f)
-                        (2f / halfDisparity).coerceAtLeast(0.005f)
-                    else 0f
-
-                    var leftEye = gpu.warpEye(bitmap, processedDepth,
-                        isLeftEye = true, halfDisparity, config.convergencePoint,
-                        EDGE_FADE_PERCENT, ghostThreshold)
-                    var rightEye = gpu.warpEye(bitmap, processedDepth,
-                        isLeftEye = false, halfDisparity, config.convergencePoint,
-                        EDGE_FADE_PERCENT, ghostThreshold)
-
-                    // Fill ghost-marked holes with background content
-                    if (filler != null && filler.gpuAvailable && ghostThreshold > 0f) {
-                        val filledLeft = filler.fill(leftEye, isLeftEye = true)
-                        leftEye.recycle()
-                        leftEye = filledLeft
-
-                        val filledRight = filler.fill(rightEye, isLeftEye = false)
-                        rightEye.recycle()
-                        rightEye = filledRight
-                    }
-
-                    Pair(leftEye, rightEye)
+                    warpPairDisney(bitmap, processedDepth, config, halfDisparity,
+                        gpu, dw, dd, filler)
                 } catch (e: Exception) {
-                    Log.w(TAG, "GPU warp failed, falling back to CPU: ${e.message}")
+                    Log.w(TAG, "GPU Disney pipeline failed, falling back to CPU: ${e.message}")
                     null
                 }
             } else null
@@ -107,6 +95,85 @@ class SbsWarper : Closeable {
             warpEyeCpu(bitmap, processedDepth, true, config, halfDisparity),
             warpEyeCpu(bitmap, processedDepth, false, config, halfDisparity)
         )
+    }
+
+    @androidx.annotation.RequiresApi(Build.VERSION_CODES.TIRAMISU)
+    private fun warpPairDisney(
+        bitmap: Bitmap,
+        processedDepth: FloatArray,
+        config: ProcessingConfig,
+        halfDisparity: Float,
+        gpu: GpuStereoWarper,
+        dw: GpuDepthWarper,
+        dd: GpuDepthDilator,
+        filler: GpuDepthGuidedFiller?
+    ): Pair<Bitmap, Bitmap> {
+        val depthSize = DepthEstimator.MODEL_INPUT_SIZE
+
+        // Encode depth to 24-bit packed bitmap (shared by all passes)
+        val depthBitmap = BitmapUtils.floatArrayToPackedBitmap(processedDepth, depthSize, depthSize)
+
+        // Scale disparity from image-space to depth-space for passes 1-3
+        val depthSpaceDisparity = halfDisparity * depthSize.toFloat() / bitmap.width.toFloat()
+
+        val leftEye = warpOneEyeDisney(bitmap, depthBitmap, depthSize, config,
+            halfDisparity, depthSpaceDisparity, true, gpu, dw, dd, filler)
+        val rightEye = warpOneEyeDisney(bitmap, depthBitmap, depthSize, config,
+            halfDisparity, depthSpaceDisparity, false, gpu, dw, dd, filler)
+
+        depthBitmap.recycle()
+        return Pair(leftEye, rightEye)
+    }
+
+    @androidx.annotation.RequiresApi(Build.VERSION_CODES.TIRAMISU)
+    private fun warpOneEyeDisney(
+        bitmap: Bitmap,
+        depthBitmap: Bitmap,
+        depthSize: Int,
+        config: ProcessingConfig,
+        halfDisparity: Float,
+        depthSpaceDisparity: Float,
+        isLeftEye: Boolean,
+        gpu: GpuStereoWarper,
+        dw: GpuDepthWarper,
+        dd: GpuDepthDilator,
+        filler: GpuDepthGuidedFiller?
+    ): Bitmap {
+        val eyeName = if (isLeftEye) "left" else "right"
+        val t0 = System.currentTimeMillis()
+
+        // Pass 1: Depth self-warp -> target-view depth with holes
+        val warpedDepth = dw.warpDepth(
+            depthBitmap, isLeftEye, depthSpaceDisparity,
+            config.convergencePoint, EDGE_FADE_PERCENT
+        )
+
+        // Pass 2-3: Directional dilation -> dense target-view depth
+        val denseTargetDepth = dd.fillHoles(warpedDepth, isLeftEye, iterations = 3)
+        warpedDepth.recycle()
+
+        // Pass 4: V2 warp with target depth validation
+        var warped = gpu.warpEyeV2(
+            bitmap, depthBitmap, denseTargetDepth,
+            isLeftEye, halfDisparity, config.convergencePoint,
+            EDGE_FADE_PERCENT
+        )
+
+        // Pass 5: Depth-guided hole fill
+        if (filler != null && filler.gpuAvailable) {
+            val filled = filler.fill(
+                warped, bitmap, depthBitmap, denseTargetDepth,
+                isLeftEye, halfDisparity, config.convergencePoint
+            )
+            warped.recycle()
+            warped = filled
+        }
+
+        denseTargetDepth.recycle()
+        val t1 = System.currentTimeMillis()
+        Log.d(TAG, "Disney pipeline ($eyeName): ${t1 - t0}ms total")
+
+        return warped
     }
 
     /**
@@ -177,7 +244,7 @@ class SbsWarper : Closeable {
             gpuWarper = try {
                 GpuStereoWarper()
             } catch (e: Exception) {
-                Log.w("SbsWarper", "Failed to create GPU warper: ${e.message}")
+                Log.w(TAG, "Failed to create GPU warper: ${e.message}")
                 null
             }
         }
@@ -185,17 +252,45 @@ class SbsWarper : Closeable {
     }
 
     @androidx.annotation.RequiresApi(Build.VERSION_CODES.TIRAMISU)
-    private fun getOrCreateHoleFiller(): GpuHoleFiller? {
-        if (!holeFillerInitialized) {
-            holeFillerInitialized = true
-            holeFiller = try {
-                GpuHoleFiller()
+    private fun getOrCreateDepthWarper(): GpuDepthWarper? {
+        if (!depthWarperInitialized) {
+            depthWarperInitialized = true
+            depthWarper = try {
+                GpuDepthWarper()
             } catch (e: Exception) {
-                Log.w("SbsWarper", "Failed to create hole filler: ${e.message}")
+                Log.w(TAG, "Failed to create depth warper: ${e.message}")
                 null
             }
         }
-        return holeFiller
+        return depthWarper
+    }
+
+    @androidx.annotation.RequiresApi(Build.VERSION_CODES.TIRAMISU)
+    private fun getOrCreateDepthDilator(): GpuDepthDilator? {
+        if (!depthDilatorInitialized) {
+            depthDilatorInitialized = true
+            depthDilator = try {
+                GpuDepthDilator()
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to create depth dilator: ${e.message}")
+                null
+            }
+        }
+        return depthDilator
+    }
+
+    @androidx.annotation.RequiresApi(Build.VERSION_CODES.TIRAMISU)
+    private fun getOrCreateDepthGuidedFiller(): GpuDepthGuidedFiller? {
+        if (!depthGuidedFillerInitialized) {
+            depthGuidedFillerInitialized = true
+            depthGuidedFiller = try {
+                GpuDepthGuidedFiller()
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to create depth-guided filler: ${e.message}")
+                null
+            }
+        }
+        return depthGuidedFiller
     }
 
     /** CPU mesh warp fallback for API < 33 or GPU failure */
@@ -293,7 +388,11 @@ class SbsWarper : Closeable {
     override fun close() {
         gpuWarper?.close()
         gpuWarper = null
-        holeFiller?.close()
-        holeFiller = null
+        depthWarper?.close()
+        depthWarper = null
+        depthDilator?.close()
+        depthDilator = null
+        depthGuidedFiller?.close()
+        depthGuidedFiller = null
     }
 }
