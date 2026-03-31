@@ -713,7 +713,7 @@ private fun BottomControlPanel(
                         value = config.depthScale,
                         onValueChange = { onConfigChange(config.copy(depthScale = it)) },
                         onValueChangeFinished = onSliderFinished,
-                        valueRange = 0.01f..0.5f,
+                        valueRange = 0.3f..0.7f,
                         enabled = isModelReady && hasDepth && !isAnyProcessing
                     )
                 }

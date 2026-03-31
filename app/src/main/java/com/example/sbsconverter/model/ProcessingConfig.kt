@@ -1,9 +1,9 @@
 package com.example.sbsconverter.model
 
 data class ProcessingConfig(
-    val depthScale: Float = 0.1f,
+    val depthScale: Float = 0.4f,
     val depthBlurKernel: Int = 3,
-    val convergencePoint: Float = 1f,
+    val convergencePoint: Float = 0.5f,
     val arrangement: Arrangement = Arrangement.CROSS_EYED
 ) {
     val smoothingLabel: String

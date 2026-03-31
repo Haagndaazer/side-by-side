@@ -29,7 +29,7 @@ object ExifDepthCalibrator {
 
     // Base depthScale at 1m distance. Tuned so sqrt(distance) scaling
     // produces natural-looking results across the range.
-    private const val BASE_SCALE = 0.1f
+    private const val BASE_SCALE = 0.3f
 
     /**
      * Reads EXIF and computes calibration info including suggested depthScale.
@@ -80,7 +80,7 @@ object ExifDepthCalibrator {
         // Normalized to main lens (24mm equiv = factor 1.0)
         val focalFactor = (24f / focalLength35mm.toFloat()).coerceIn(0.3f, 1.5f)
 
-        val depthScale = (BASE_SCALE * distanceFactor * focalFactor).coerceIn(0.1f, 0.4f)
+        val depthScale = (BASE_SCALE * distanceFactor * focalFactor).coerceIn(0.3f, 0.7f)
 
         val lens = classifyLens(focalLength35mm)
         val sceneType = classifyScene(distanceMeters.toFloat(), focalLength35mm)

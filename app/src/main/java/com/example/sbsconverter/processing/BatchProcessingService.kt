@@ -164,7 +164,7 @@ class BatchProcessingService : Service() {
                     val calibration = ExifDepthCalibrator.calibrate(
                         this@BatchProcessingService, item.uri, rawRange, bitmap.width
                     )
-                    val config = ProcessingConfig(depthScale = calibration?.depthScale ?: 0.1f)
+                    val config = ProcessingConfig(depthScale = calibration?.depthScale ?: 0.4f)
 
                     val result = withContext(Dispatchers.Default) {
                         processor.processImage(bitmap, rawDepth, config)
